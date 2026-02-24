@@ -23,15 +23,24 @@ echo "Step 1: Running evaluations..."
 #  --max-gen-toks 4096
 #  --config configs/models_config.json
 
-# test run
+
 python -m src.eval_all_benchmarks \
   --models base \
   --benchmarks aime24 aime25 \
-  --modes greedy \
-  --max-gen-toks 4096 \
-  --config configs/models_config.json \
-  --limit 1 \
-  --device mps
+  --modes greedy avg32 \
+  --max-gen-toks 4096
+  --config configs/models_config.json
+
+
+# test run
+#python -m src.eval_all_benchmarks \
+#  --models base \
+#  --benchmarks aime24 aime25 \
+#  --modes greedy \
+#  --max-gen-toks 4096 \
+#  --config configs/models_config.json \
+#  --limit 1 \
+#  --device mps
 
 # Step 2: Find the most recent summary file
 SUMMARY_FILE=$(ls -t results/evaluation_summary_*.json 2>/dev/null | head -1)
