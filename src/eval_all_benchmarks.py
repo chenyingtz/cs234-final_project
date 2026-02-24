@@ -301,6 +301,17 @@ Examples:
         action="store_true",
         help="Skip evaluations if output directory already exists"
     )
+    parser.add_argument(
+        "--checkpoint-file",
+        type=str,
+        default=None,
+        help="Path to checkpoint file for resume (default: auto-generated in results_dir)"
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from checkpoint file if it exists"
+    )
     
     args = parser.parse_args()
     
@@ -346,10 +357,36 @@ Examples:
         if model_path and not Path(model_path).exists():
             print(f"WARNING: Model path '{model_path}' does not exist. Will try to load anyway.")
     
-    # Create results summary
-    all_results = []
-    summary_file = Path(args.results_dir) / f"evaluation_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    # Setup checkpoint file
     Path(args.results_dir).mkdir(parents=True, exist_ok=True)
+    
+    if args.checkpoint_file:
+        checkpoint_file = Path(args.checkpoint_file)
+    else:
+        checkpoint_file = Path(args.results_dir) / "evaluation_checkpoint.json"
+    
+    # Load existing checkpoint if resuming
+    completed_evaluations = set()
+    all_results = []
+    summary_file = None
+    
+    if args.resume and checkpoint_file.exists():
+        print(f"Resuming from checkpoint: {checkpoint_file}")
+        try:
+            with open(checkpoint_file, "r") as f:
+                checkpoint_data = json.load(f)
+                completed_evaluations = set(checkpoint_data.get("completed", []))
+                all_results = checkpoint_data.get("results", [])
+                summary_file = Path(checkpoint_data.get("summary_file", ""))
+                print(f"Found {len(completed_evaluations)} completed evaluations")
+                print(f"Resuming with {len(all_results)} existing results")
+        except Exception as e:
+            print(f"Warning: Could not load checkpoint: {e}")
+            print("Starting fresh evaluation")
+    
+    # Create new summary file if not resuming
+    if summary_file is None or not summary_file.exists():
+        summary_file = Path(args.results_dir) / f"evaluation_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     
     total_evaluations = len(args.models) * len(args.benchmarks) * len(args.modes)
     current_eval = 0
@@ -382,15 +419,27 @@ Examples:
                 current_eval += 1
                 print(f"\n[{current_eval}/{total_evaluations}] ", end="")
                 
-                # Check if should skip
+                # Create unique evaluation ID
+                eval_id = f"{model_key}_{benchmark}_{mode}"
+                
+                # Check if already completed (from checkpoint or skip-existing)
+                if eval_id in completed_evaluations:
+                    print(f"Skipping (completed): {model_key} | {benchmark} | {mode}")
+                    continue
+                
                 if args.skip_existing:
                     model_safe = model_name.replace("/", "_").replace("\\", "_")
-                    # Check for existing results (simplified check)
+                    # Check for existing results directory
                     pattern = f"{benchmark}_{model_safe}_{mode}_*"
                     existing = list(Path(args.results_dir).glob(pattern))
                     if existing:
-                        print(f"Skipping (exists): {model_key} | {benchmark} | {mode}")
-                        continue
+                        # Check if results.json exists in the directory
+                        for existing_dir in existing:
+                            results_json = list(existing_dir.rglob("results_*.json"))
+                            if results_json:
+                                print(f"Skipping (exists): {model_key} | {benchmark} | {mode}")
+                                completed_evaluations.add(eval_id)
+                                continue
                 
                 result = evaluate_single_config(
                     model_name=model_name,
@@ -407,14 +456,27 @@ Examples:
                 result["model_key"] = model_key
                 all_results.append(result)
                 
-                # Save intermediate results
+                # Mark as completed
+                completed_evaluations.add(eval_id)
+                
+                # Save checkpoint and intermediate results
+                checkpoint_data = {
+                    "completed": list(completed_evaluations),
+                    "results": all_results,
+                    "summary_file": str(summary_file),
+                    "config": vars(args),
+                    "model_config": model_config,
+                    "total_time": time.time() - start_time,
+                    "last_updated": datetime.now().isoformat(),
+                }
+                
+                # Save checkpoint
+                with open(checkpoint_file, "w") as f:
+                    json.dump(checkpoint_data, f, indent=2)
+                
+                # Save summary file
                 with open(summary_file, "w") as f:
-                    json.dump({
-                        "config": vars(args),
-                        "model_config": model_config,
-                        "results": all_results,
-                        "total_time": time.time() - start_time,
-                    }, f, indent=2)
+                    json.dump(checkpoint_data, f, indent=2)
     
     total_time = time.time() - start_time
     
