@@ -20,7 +20,7 @@ echo "Step 1: Running evaluations..."
 #  --models base sft srl srl_rlvr \
 #  --benchmarks amc23 aime24 aime25 minerva_math \
 #  --modes greedy avg1 avg32 \
-#  --max-gen-toks 4096
+#  --max-gen-toks 4096 \
 #  --config configs/models_config.json
 
 
@@ -28,7 +28,7 @@ python -m src.eval_all_benchmarks \
   --models base \
   --benchmarks aime24 aime25 \
   --modes greedy avg32 \
-  --max-gen-toks 4096
+  --max-gen-toks 4096 \
   --config configs/models_config.json
 
 
