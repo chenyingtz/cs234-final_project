@@ -2,7 +2,7 @@
 
 End-to-end implementation of **Supervised Reinforcement Learning (SRL)** for LLM step-wise reasoning: train Qwen2.5-7B-Instruct on s1K-1.1 expert trajectories, then evaluate on AIME24.
 
-## Architecture (10–15 bullets)
+## Architecture
 
 1. **Data prep**: Load s1K-1.1 from HuggingFace; parse expert solutions into numbered steps (`1. …`, `2. …`); create N-1 training instances per solution (steps 2..N).
 2. **SRL instances**: Each instance has `context = problem + expert steps 1..k-1`, `target = expert step k`.
@@ -15,12 +15,9 @@ End-to-end implementation of **Supervised Reinforcement Learning (SRL)** for LLM
 9. **Checkpointing**: Save model + tokenizer every N steps; support `--resume`.
 10. **Evaluation**: lm-evaluation-harness task `aime24`; greedy decoding and Avg@N (N=1, 32) with HF or vLLM backend.
 11. **Answer extraction**: Utility for AIME-style integer 0–999 from model output (`\boxed{...}`, etc.).
-12. **Pluggable rewards**: Stub interfaces for embedding cosine and LLM-as-judge; SequenceMatcher is fully implemented.
-
 ## Setup
 
 ```bash
-cd xzt
 pip install -r requirements.txt
 ```
 
@@ -30,12 +27,6 @@ Create step-wise SRL training instances from s1K-1.1:
 
 ```bash
 python -m src.data_prep --output data/srl_instances.jsonl
-```
-
-For smoke test (few examples):
-
-```bash
-python -m src.data_prep --output data/srl_instances_smoke.jsonl --max-examples 50
 ```
 
 ## Training
@@ -57,19 +48,6 @@ python -m src.train_srl \
   --batch-size 4 \
   --group-size 4 \
   --checkpoint-every 100
-```
-
-Multi-GPU (via Accelerate):
-
-```bash
-accelerate launch -m src.train_srl --config configs/srl_qwen7b.yaml
-```
-
-### Smoke test (CPU, tiny model)
-
-```bash
-python -m src.data_prep --output data/srl_instances_smoke.jsonl --max-examples 20
-python -m src.train_srl --config configs/smoke_test.yaml --smoke-test
 ```
 
 ### Resume
@@ -150,9 +128,7 @@ xzt/
 | Stage | Command |
 |-------|---------|
 | Data prep | `python -m src.data_prep --output data/srl_instances.jsonl` |
-| Smoke data | `python -m src.data_prep --output data/srl_instances_smoke.jsonl --max-examples 50` |
 | Train (full) | `python -m src.train_srl --config configs/srl_qwen7b.yaml` |
-| Train (smoke) | `python -m src.train_srl --config configs/smoke_test.yaml --smoke-test` |
 | Eval base greedy | `python -m src.eval_aime24 --model Qwen/Qwen2.5-7B-Instruct --mode greedy` |
 | Eval base Avg@32 | `python -m src.eval_aime24 --model Qwen/Qwen2.5-7B-Instruct --mode avg32` |
 | Eval SRL greedy | `python -m src.eval_aime24 --model-path checkpoints/srl/step_500 --mode greedy` |
