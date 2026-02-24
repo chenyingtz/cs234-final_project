@@ -1,6 +1,6 @@
 # SRL GRPO training config for Qwen2.5-7B-Instruct
 
-model: Qwen/Qwen2.5-7B-Instruct
+model: Qwen/Qwen2.5-0.5B-Instruct
 data: data/srl_train.jsonl
 val_data: data/srl_val.jsonl
 output_dir: checkpoints/srl_qwen7b

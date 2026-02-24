@@ -134,6 +134,10 @@ def evaluate_single_config(
         temperature = 1.0
         do_sample = True
         n = 32
+        # Warn about HF backend issues with avg32
+        if backend == "hf":
+            print("WARNING: avg32 mode with HF backend may have compatibility issues.")
+            print("Consider using --backend vllm for avg32 mode, or use avg1/greedy modes.")
     else:
         raise ValueError(f"Unknown mode: {mode}")
 

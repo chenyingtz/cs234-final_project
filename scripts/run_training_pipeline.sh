@@ -80,7 +80,8 @@ if [[ $SKIP_SRL -eq 0 ]]; then
     --lr 5e-7 \
     --clip-epsilon 0.2 \
     --eps-std 0.01 \
-    --checkpoint-every 100
+    --checkpoint-every 100 \
+    --config configs/srl_qwen7b.yaml
   echo ""
 else
   echo "[Stage 2/3] SRL training skipped (--skip-srl)"

@@ -25,37 +25,17 @@ so that the existing evaluation pipeline can pick it up.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 from typing import Dict, List
 
 import torch
 from datasets import load_dataset
-from transformers import (
-    AutoTokenizer,
-    TrainingArguments,
-)
-from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
+from transformers import AutoTokenizer
+from trl import SFTTrainer, SFTConfig
 
 from .model_config import get_base_model
 
 
 DEFAULT_DATASET = "simplescaling/s1K-1.1"
-
-
-@dataclass
-class SFTConfig:
-    model_name: str
-    output_dir: str
-    dataset_name: str
-    max_train_samples: int | None
-    max_eval_samples: int | None
-
-    # Paper hyperparameters (Table 5)
-    learning_rate: float = 5e-6
-    global_batch_size: int = 64
-    num_train_epochs: int = 3
-    warmup_ratio: float = 0.3
-    lr_scheduler_type: str = "cosine"
 
 
 def build_chat_example(example: Dict) -> str:
@@ -123,82 +103,99 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    cfg = SFTConfig(
-        model_name=args.model,
-        output_dir=args.output_dir,
-        dataset_name=args.dataset_name,
-        max_train_samples=args.max_train_samples,
-        max_eval_samples=args.max_eval_samples,
-    )
-
-    # 1. Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(cfg.model_name, use_fast=True)
+    # 1. Load tokenizer first to get response template
+    tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     # 2. Load dataset
-    raw_train = load_dataset(cfg.dataset_name, split="train")
-    raw_eval = load_dataset(cfg.dataset_name, split="validation", streaming=False)
+    dataset = load_dataset(args.dataset_name, split="train")
+    #raw_eval = load_dataset(args.dataset_name, split="test", streaming=False)
 
-    if cfg.max_train_samples is not None:
-        raw_train = raw_train.select(range(min(cfg.max_train_samples, len(raw_train))))
-    if cfg.max_eval_samples is not None:
-        raw_eval = raw_eval.select(range(min(cfg.max_eval_samples, len(raw_eval))))
+    EVAL_SIZE=60
+    TRAIN_SIZE=len(dataset) - EVAL_SIZE
+
+    raw_train = dataset.select(range(TRAIN_SIZE))
+    raw_eval = dataset.select(range(TRAIN_SIZE, (TRAIN_SIZE + EVAL_SIZE)))
+
+    if args.max_train_samples is not None:
+        raw_train = raw_train.select(range(min(args.max_train_samples, len(raw_train))))
+    if args.max_eval_samples is not None:
+        raw_eval = raw_eval.select(range(min(args.max_eval_samples, len(raw_eval))))
 
     def formatting_func(example: Dict) -> Dict[str, str]:
         messages = build_chat_example(example)
         text = tokenizer.apply_chat_template(
             messages,
             tokenize=False,
+            add_generation_prompt=False,
         )
         return {"text": text}
 
     train_dataset = raw_train.map(formatting_func)
     eval_dataset = raw_eval.map(formatting_func)
 
-    # 3. Data collator: only learn on assistant tokens
-    response_template = "<|im_start|>assistant"
-    collator = DataCollatorForCompletionOnlyLM(
-        response_template=response_template,
-        tokenizer=tokenizer,
-    )
-
-    # Approximate per-device batch + grad_accum to get global ≈ 64 for 1 GPU.
+    # 3. Configure SFTConfig with paper hyperparameters (Table 5)
+    # Paper parameters:
+    # - learning_rate = 5e-6
+    # - global batch size ≈ 64
+    # - scheduler = cosine
+    # - warmup_ratio = 0.3
+    # - num_train_epochs = 3
+    # - dtype = bf16 (if available)
+    
+    # Calculate batch size for global batch ≈ 64
     per_device_train_batch_size = 1
-    gradient_accumulation_steps = cfg.global_batch_size // per_device_train_batch_size
-
-    # 4. Training arguments (match paper)
-    training_args = TrainingArguments(
-        output_dir=cfg.output_dir,
+    gradient_accumulation_steps = 64  # Global batch size = 64
+    
+    # SFTConfig extends TrainingArguments in TRL v0.28.0
+    training_config = SFTConfig(
+        # Model and data
+        model_name=args.model,
+        dataset_name=args.dataset_name,
+        
+        # Paper hyperparameters (Table 5)
+        learning_rate=5e-6,
         per_device_train_batch_size=per_device_train_batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
-        learning_rate=cfg.learning_rate,
-        num_train_epochs=cfg.num_train_epochs,
-        lr_scheduler_type=cfg.lr_scheduler_type,
-        warmup_ratio=cfg.warmup_ratio,
+        num_train_epochs=3,
+        lr_scheduler_type="cosine",
+        warmup_ratio=0.3,
+        
+        # Output and logging
+        output_dir=args.output_dir,
         logging_steps=10,
         save_strategy="epoch",
-        bf16=torch.cuda.is_available(),  # use bf16 if available
         report_to="none",
+        
+        # Data type (paper uses bf16)
+        bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
+        
+        # SFT-specific parameters (TRL v0.28.0)
+        # completion_only_loss=True masks non-assistant tokens
+        completion_only_loss=True,
+        # response_template is used to identify assistant tokens
+        response_template="<|im_start|>assistant\n",
+        
+        # Sequence length
+        max_seq_length=2048,
     )
 
-    # 5. Initialize SFT trainer
+    # 4. Initialize SFT trainer with SFTConfig
     trainer = SFTTrainer(
-        model=cfg.model_name,
-        args=training_args,
+        model=args.model,
+        args=training_config,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         dataset_text_field="text",
         tokenizer=tokenizer,
-        data_collator=collator,
-        max_seq_length=2048,
     )
 
-    # 6. Train
+    # 5. Train
     trainer.train()
 
-    # Save final model (useful path for evaluation pipeline)
-    trainer.save_model(cfg.output_dir)
+    # 6. Save final model (useful path for evaluation pipeline)
+    trainer.save_model(args.output_dir)
 
 
 if __name__ == "__main__":
