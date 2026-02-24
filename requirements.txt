@@ -14,6 +14,9 @@ peft>=0.7.0
 
 # Evaluation
 lm-eval>=0.4.0
+pandas>=2.0.0  # For result aggregation
+matplotlib>=3.7.0  # For plotting
+seaborn>=0.12.0  # For plotting
 
 # Config & utils
 pyyaml>=6.0

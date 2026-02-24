@@ -1,0 +1,52 @@
+{
+  "description": "Model configuration for comprehensive evaluation based on SRL paper parameters",
+  "base_model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "models": {
+    "base": {
+      "model_name": null,
+      "model_path": null,
+      "description": "Base Qwen model (no fine-tuning). Uses base_model from config."
+    },
+    "sft": {
+      "model_name": null,
+      "model_path": "checkpoints/sft/step_final",
+      "description": "Supervised Fine-Tuning (SFT) model. Uses base_model from config. Update path to your SFT checkpoint."
+    },
+    "srl": {
+      "model_name": null,
+      "model_path": "checkpoints/srl/step_500",
+      "description": "Supervised Reinforcement Learning (SRL) model. Uses base_model from config. Update path to your SRL checkpoint."
+    },
+    "srl_rlvr": {
+      "model_name": null,
+      "model_path": "checkpoints/srl_rlvr/step_final",
+      "description": "SRL→RLVR pipeline model (SRL then RLVR). Uses base_model from config. Update path to your SRL→RLVR checkpoint."
+    }
+  },
+  "paper_parameters": {
+    "max_gen_toks": 4096,
+    "batch_size": 1,
+    "temperature_greedy": 0.0,
+    "temperature_sampling": 1.0,
+    "num_samples_avg1": 1,
+    "num_samples_avg32": 32
+  },
+  "benchmarks": {
+    "amc23": {
+      "description": "AMC 2023 mathematical reasoning benchmark",
+      "lm_eval_task": "amc23"
+    },
+    "aime24": {
+      "description": "AIME 2024 mathematical reasoning benchmark",
+      "lm_eval_task": "aime24"
+    },
+    "aime25": {
+      "description": "AIME 2025 mathematical reasoning benchmark",
+      "lm_eval_task": "aime25"
+    },
+    "minerva_math": {
+      "description": "Minerva Math benchmark",
+      "lm_eval_task": "minerva_math"
+    }
+  }
+}
