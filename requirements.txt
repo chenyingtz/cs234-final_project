@@ -1,0 +1,23 @@
+# SRL (Supervised Reinforcement Learning) for LLM Reasoning
+# Python 3.10+
+#
+# Install: pip install -r requirements.txt
+
+# Core ML
+torch>=2.0.0
+transformers>=4.36.0
+datasets>=2.14.0
+
+# Training (optional for GRPO)
+trl>=0.7.0
+peft>=0.7.0
+
+# Evaluation
+lm-eval>=0.4.0
+
+# Config & utils
+pyyaml>=6.0
+tqdm>=4.65.0
+
+# Testing
+pytest>=7.0.0

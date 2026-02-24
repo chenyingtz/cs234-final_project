@@ -1,0 +1,23 @@
+# Model checkpoints (too large for GitHub)
+checkpoints/
+
+# Eval results (reproducible)
+results/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment
+.env
+*.egg-info/
+dist/
+build/
+
+# HuggingFace cache
+.cache/
