@@ -1,0 +1,34 @@
+[
+  {
+    "model": "base",
+    "benchmark": "aime24",
+    "mode": "greedy",
+    "metric": 0.03333333333333333,
+    "elapsed_time": 1328.5329468250275,
+    "output_path": "results/aime24_Qwen_Qwen2.5-3B-Instruct_greedy_20260224_155957"
+  },
+  {
+    "model": "base",
+    "benchmark": "aime24",
+    "mode": "avg1",
+    "metric": 0.06666666666666667,
+    "elapsed_time": 1157.8866600990295,
+    "output_path": "results/aime24_Qwen_Qwen2.5-3B-Instruct_avg1_20260224_162206"
+  },
+  {
+    "model": "base",
+    "benchmark": "aime25",
+    "mode": "greedy",
+    "metric": 0.03333333333333333,
+    "elapsed_time": 1278.9731702804565,
+    "output_path": "results/aime25_Qwen_Qwen2.5-3B-Instruct_greedy_20260224_164124"
+  },
+  {
+    "model": "base",
+    "benchmark": "aime25",
+    "mode": "avg1",
+    "metric": 0.03333333333333333,
+    "elapsed_time": 1193.7658472061157,
+    "output_path": "results/aime25_Qwen_Qwen2.5-3B-Instruct_avg1_20260224_170243"
+  }
+]

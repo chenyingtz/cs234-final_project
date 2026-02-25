@@ -32,6 +32,16 @@ def main():
     parser = argparse.ArgumentParser(description="SRL GRPO training")
     parser.add_argument("--config", type=str, default=None, help="YAML config path (overrides other args)")
     parser.add_argument("--model", type=str, default="Qwen/Qwen2.5-7B-Instruct", help="Model name or path")
+    parser.add_argument(
+        "--init-from",
+        type=str,
+        default="checkpoints/sft",
+        help=(
+            "If this directory exists and --resume is not set, initialize SRL "
+            "from this checkpoint instead of the base model (default: checkpoints/sft). "
+            "Set to empty string to disable and use --model directly."
+        ),
+    )
     parser.add_argument("--data", type=str, default="data/srl_instances.jsonl", help="SRL instances JSONL")
     parser.add_argument("--output-dir", type=str, default="checkpoints/srl", help="Checkpoint output dir")
     parser.add_argument("--num-steps", type=int, default=500, help="Training steps")
@@ -58,6 +68,7 @@ def main():
             "lr": "lr", "clip_epsilon": "clip_epsilon", "eps_std": "eps_std",
             "kl_coef": "kl_coef", "checkpoint_every": "checkpoint_every", "seed": "seed",
             "resume": "resume", "val_data": "val_data", "eval_every": "eval_every",
+            "init_from": "init_from",
         }
         for k, v in cfg.items():
             attr = mapping.get(k, k)
@@ -77,12 +88,27 @@ def main():
             start_step = int(step_file.read_text().strip())
             print(f"Resuming from step {start_step}, {args.num_steps - start_step} steps remaining")
     else:
-        model = AutoModelForCausalLM.from_pretrained(
-            args.model,
-            torch_dtype=torch.bfloat16,
-            trust_remote_code=True,
-        )
-        tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+        init_from_path = args.init_from.strip()
+        init_path = Path(init_from_path)
+        if init_from_path and init_path.exists():
+            print(f"Initializing SRL from SFT checkpoint: {init_from_path}")
+            model = AutoModelForCausalLM.from_pretrained(
+                init_from_path,
+                torch_dtype=torch.bfloat16,
+                trust_remote_code=True,
+            )
+            tokenizer = AutoTokenizer.from_pretrained(init_from_path, trust_remote_code=True)
+        else:
+            if init_from_path:
+                print(f"Init-from path '{init_from_path}' not found; falling back to base model: {args.model}")
+            else:
+                print(f"No init-from path provided; using base model: {args.model}")
+            model = AutoModelForCausalLM.from_pretrained(
+                args.model,
+                torch_dtype=torch.bfloat16,
+                trust_remote_code=True,
+            )
+            tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
 
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
