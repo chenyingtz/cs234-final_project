@@ -169,8 +169,7 @@ def main() -> None:
         device_map="auto" if torch.cuda.is_available() else None,
     )
     print("model", model)
-    print("model_has_lora", model_has_lora)
-    
+
     if not args.no_lora:
         # Configure LoRA for Qwen models
         # Target attention and MLP layers
