@@ -1,6 +1,7 @@
 """
-RLVR (outcome-based GRPO) training script.
+RLVR (outcome-based GRPO) training script with LoRA.
 
+Uses LoRA (Low-Rank Adaptation) for parameter-efficient fine-tuning.
 
 - batch size ≈ 128 (prompts)
 - learning_rate = 5e-7
@@ -8,6 +9,8 @@ RLVR (outcome-based GRPO) training script.
 - rollout number (num_generations) = 8
 - KL loss coeff (beta) = 0.0
 - dtype = bf16 (if available)
+- LoRA rank = 16 (default)
+- LoRA alpha = 32 (default)
 
 This script can be run:
 1. After SRL training, using the SRL checkpoint as initialization:
@@ -20,8 +23,8 @@ This script can be run:
      --output-dir checkpoints/srl_rlvr
 
 After training, point `configs/models_config.json["models"]["srl_rlvr"]["model_path"]`
-to the RLVR checkpoint directory (e.g. `checkpoints/srl_rlvr`) so that the
-existing evaluation pipeline can pick it up.
+to the RLVR checkpoint directory (e.g. `checkpoints/srl_rlvr` or `checkpoints/srl_rlvr_merged`) 
+so that the existing evaluation pipeline can pick it up.
 """
 
 from __future__ import annotations
@@ -31,7 +34,8 @@ from dataclasses import dataclass
 from typing import Dict, Any
 
 from datasets import load_dataset
-from transformers import AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import LoraConfig, get_peft_model, TaskType
 from trl import GRPOTrainer, GRPOConfig
 import torch
 
@@ -149,6 +153,29 @@ def main() -> None:
         default=256,
         help="Optional: limit number of eval samples",
     )
+    parser.add_argument(
+        "--lora-r",
+        type=int,
+        default=16,
+        help="LoRA rank (default: 16)",
+    )
+    parser.add_argument(
+        "--lora-alpha",
+        type=int,
+        default=32,
+        help="LoRA alpha scaling parameter (default: 32)",
+    )
+    parser.add_argument(
+        "--lora-dropout",
+        type=float,
+        default=0.05,
+        help="LoRA dropout rate (default: 0.05)",
+    )
+    parser.add_argument(
+        "--no-lora",
+        action="store_true",
+        help="Disable LoRA and use full fine-tuning",
+    )
 
     args = parser.parse_args()
 
@@ -205,25 +232,52 @@ def main() -> None:
     train_dataset = raw_train.map(map_to_prompts)
     eval_dataset = raw_eval.map(map_to_prompts)
 
-    # 2. Model loading config
-    # Note: Quantization cannot be used for fine-tuning base models
-    # Quantized models require PEFT adapters for training
-    # We only use quantization if explicitly needed for checkpoint loading (disabled by default)
+    # 2. Load model and apply LoRA (if enabled)
+    print(f"Loading model: {init_from}")
+    model = AutoModelForCausalLM.from_pretrained(
+        init_from,
+        torch_dtype=torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16,
+        trust_remote_code=True,
+        device_map="auto" if torch.cuda.is_available() else None,
+    )
+    
+    if not args.no_lora:
+        # Configure LoRA for Qwen models
+        # Target attention and MLP layers
+        target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
+        # For Qwen models, also target MLP layers if they exist
+        try:
+            # Check if model has gate_proj, up_proj, down_proj (typical for Qwen)
+            first_layer = next(iter(model.model.layers)) if hasattr(model, 'model') else None
+            if first_layer and hasattr(first_layer, 'mlp'):
+                if hasattr(first_layer.mlp, 'gate_proj'):
+                    target_modules.extend(["gate_proj", "up_proj", "down_proj"])
+        except:
+            pass
+        
+        lora_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            target_modules=target_modules,
+            bias="none",
+        )
+        
+        print(f"Applying LoRA with rank={args.lora_r}, alpha={args.lora_alpha}, dropout={args.lora_dropout}")
+        print(f"Target modules: {target_modules}")
+        model = get_peft_model(model, lora_config)
+        model.print_trainable_parameters()
+    else:
+        print("Using full fine-tuning (LoRA disabled)")
+
+    # 3. Model loading config for GRPOConfig (if needed)
     model_kwargs = {
         "dtype": torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16,
         "low_cpu_mem_usage": True,
     }
-    
-    # Quantization is disabled to allow full fine-tuning
-    # If memory is constrained, consider using gradient checkpointing or smaller batch sizes instead
-    # quantization_config = BitsAndBytesConfig(
-    #     load_in_4bit=True,
-    #     bnb_4bit_compute_dtype=torch.float16,
-    #     bnb_4bit_quant_type="nf4",
-    # )
-    # model_kwargs["quantization_config"] = quantization_config
 
-    # 3. GRPO training configuration (match Table 6)
+    # 4. GRPO training configuration (match Table 6)
     # Paper hyperparameters (Table 6):
     # - batch size ≈ 128 (prompts)
     # - learning_rate = 5e-7
@@ -254,21 +308,43 @@ def main() -> None:
         bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
     )
 
-    # 4. Initialize GRPOTrainer
+    # 5. Initialize GRPOTrainer
     # Note: In TRL v0.28.0:
     # - tokenizer is not passed directly (loaded automatically from model)
     # - prompt_column and completion_column are not parameters
     # - Dataset should have "prompt" and "completion" columns (standard names)
+    # - Pass the model object directly (not model path) when using LoRA
     trainer = GRPOTrainer(
-        model=cfg.init_from,
+        model=model,  # Use the LoRA-enabled model
         reward_funcs=[accuracy_reward_func],
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
     )
 
-    # 5. Start training
+    # 6. Start training
     trainer.train()
+
+    # 7. Save final model (useful path for evaluation pipeline)
+    if not args.no_lora:
+        # For LoRA, save the adapter weights
+        trainer.save_model(cfg.output_dir)
+        tokenizer.save_pretrained(cfg.output_dir)
+        
+        # Also merge and save the full model (for easier evaluation)
+        # This creates a model that can be loaded without PEFT
+        merged_model = model.merge_and_unload()
+        merged_output_dir = cfg.output_dir + "_merged"
+        merged_model.save_pretrained(merged_output_dir)
+        tokenizer.save_pretrained(merged_output_dir)
+        print(f"Saved LoRA adapter to: {cfg.output_dir}")
+        print(f"Saved merged model (for evaluation) to: {merged_output_dir}")
+        print(f"Note: Use '{merged_output_dir}' in models_config.json for evaluation")
+    else:
+        # For full fine-tuning, save normally
+        trainer.save_model(cfg.output_dir)
+        tokenizer.save_pretrained(cfg.output_dir)
+        print(f"Saved model to: {cfg.output_dir}")
 
 
 if __name__ == "__main__":
