@@ -284,7 +284,7 @@ def main():
     else:
         print("Using full fine-tuning (LoRA disabled)")
 
-    #model.gradient_checkpointing_enable()
+    model.gradient_checkpointing_enable()
     if not torch.cuda.is_available() or device.type == "cpu":
         model = model.to(device)
 
