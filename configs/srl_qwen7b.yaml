@@ -18,5 +18,5 @@ eps_std: 0.01
 kl_coef: 0.0
 
 checkpoint_every: 1
-eval_every: 50
+eval_every: 5
 seed: 42
