@@ -57,7 +57,7 @@ class RLVRConfig:
     learning_rate: float = 5e-7
     batch_size: int = 128
     num_generations: int = 8
-    num_train_epochs: int = 3  # paper uses steps; epochs is a practical proxy
+    num_train_epochs: int = 2  # paper uses steps; epochs is a practical proxy
     beta: float = 0.0  # KL coeff
 
 
@@ -240,10 +240,13 @@ def main() -> None:
         trust_remote_code=True,
         device_map="auto" if torch.cuda.is_available() else None,
     )
+    print("model", model)
+    print("model_has_lora", model_has_lora)
     
     if not args.no_lora:
         # Configure LoRA for Qwen models
         # Target attention and MLP layers
+        print("Applying LoRA")
         target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
         # For Qwen models, also target MLP layers if they exist
         try:
@@ -252,7 +255,8 @@ def main() -> None:
             if first_layer and hasattr(first_layer, 'mlp'):
                 if hasattr(first_layer.mlp, 'gate_proj'):
                     target_modules.extend(["gate_proj", "up_proj", "down_proj"])
-        except:
+        except Exception as e:
+            print(f"Error in target modules: {e}")
             pass
         
         lora_config = LoraConfig(

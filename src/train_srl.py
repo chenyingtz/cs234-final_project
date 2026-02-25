@@ -230,6 +230,9 @@ def main():
                 print(f"Init-from path '{init_from_path}' exists but contains no valid checkpoint files; falling back to base model: {base_model}")
             else:
                 print(f"Init-from path '{init_from_path}' not found; falling back to base model: {base_model}")
+            
+            # Load base model (LoRA will be applied later if enabled)
+            print(f"Loading base model: {base_model}")
             model = AutoModelForCausalLM.from_pretrained(
                 base_model,
                 dtype=torch.bfloat16,
@@ -245,11 +248,14 @@ def main():
     # Check if model is a PEFT model by checking for peft_config attribute
     from peft import PeftModel
     model_has_lora = isinstance(model, PeftModel) or hasattr(model, 'peft_config')
+    print("model", model)
+    print("model_has_lora", model_has_lora)
 
     # Apply LoRA if enabled and model doesn't already have LoRA
     if not args.no_lora and not model_has_lora:
         # Configure LoRA for Qwen models
         # Target attention and MLP layers
+        print("Applying LoRA")
         target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
         # For Qwen models, also target MLP layers if they exist
         try:
@@ -258,7 +264,8 @@ def main():
             if first_layer and hasattr(first_layer, 'mlp'):
                 if hasattr(first_layer.mlp, 'gate_proj'):
                     target_modules.extend(["gate_proj", "up_proj", "down_proj"])
-        except:
+        except Exception as e:
+            print(f"Error in target modules: {e}")
             pass
         
         lora_config = LoraConfig(

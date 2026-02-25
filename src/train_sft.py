@@ -168,10 +168,13 @@ def main() -> None:
         trust_remote_code=True,
         device_map="auto" if torch.cuda.is_available() else None,
     )
+    print("model", model)
+    print("model_has_lora", model_has_lora)
     
     if not args.no_lora:
         # Configure LoRA for Qwen models
         # Target attention and MLP layers
+        print("Applying LoRA")
         target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
         # For Qwen models, also target MLP layers if they exist
         try:
@@ -180,7 +183,8 @@ def main() -> None:
             if first_layer and hasattr(first_layer, 'mlp'):
                 if hasattr(first_layer.mlp, 'gate_proj'):
                     target_modules.extend(["gate_proj", "up_proj", "down_proj"])
-        except:
+        except Exception as e:
+            print(f"Error in target modules: {e}")
             pass
         
         lora_config = LoraConfig(
@@ -218,7 +222,7 @@ def main() -> None:
         learning_rate=5e-6,
         per_device_train_batch_size=per_device_train_batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
-        num_train_epochs=3,
+        num_train_epochs=2,
         lr_scheduler_type="cosine",
         warmup_ratio=0.3,
         
