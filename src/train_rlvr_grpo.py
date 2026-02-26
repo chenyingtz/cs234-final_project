@@ -298,6 +298,11 @@ def main() -> None:
     else:
         print("Using full fine-tuning (LoRA disabled)")
 
+    # Enable gradient checkpointing to reduce memory usage
+    print("Disabling use_cache and enabling gradient checkpointing")
+    model.use_cache = False
+    model.gradient_checkpointing_enable()
+
     # 3. Model loading config for GRPOConfig (if needed)
     model_kwargs = {
         "dtype": torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16,
