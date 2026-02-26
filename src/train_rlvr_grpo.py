@@ -315,6 +315,9 @@ def main() -> None:
     
     per_device_train_batch_size = 1
     gradient_accumulation_steps = cfg.batch_size // per_device_train_batch_size
+    print(f"Per device train batch size: {per_device_train_batch_size}")
+    print(f"Batch size: {cfg.batch_size}")
+    print(f"Gradient accumulation steps: {gradient_accumulation_steps}")
 
     # GRPOConfig in TRL v0.28.0 extends TrainingArguments
     # Note: model is passed to GRPOTrainer, not to GRPOConfig
@@ -338,7 +341,7 @@ def main() -> None:
         eval_strategy="steps" if eval_dataset else "no",
         eval_steps=50 if eval_dataset else None,  # Evaluate every 50 steps if eval dataset provided
         save_strategy="steps",
-        save_steps=100,  # Save checkpoint every 100 steps
+        save_steps=5,  # Save checkpoint every 5 steps
         save_total_limit=3,  # Keep only the last 3 checkpoints
         load_best_model_at_end=False,  # Don't load best model (we'll handle this manually if needed)
         # Logging details
