@@ -55,8 +55,8 @@ class RLVRConfig:
 
     # Paper hyperparameters (Table 6)
     learning_rate: float = 5e-7
-    batch_size: int = 128
-    num_generations: int = 8
+    batch_size: int = 4
+    num_generations: int = 4
     num_train_epochs: int = 2  # paper uses steps; epochs is a practical proxy
     beta: float = 0.0  # KL coeff
 
