@@ -283,10 +283,24 @@ def main():
         model.print_trainable_parameters()
     else:
         print("Using full fine-tuning (LoRA disabled)")
+        # For full fine-tuning, ensure all parameters require gradients
+        for param in model.parameters():
+            param.requires_grad = True
 
+    # Ensure model is in training mode and parameters require gradients
+    model.train()
     print("Disabling use_cache and enabling gradient checkpointing")
     model.use_cache = False
     model.gradient_checkpointing_enable()
+    
+    # Verify that some parameters require gradients
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Trainable parameters: {trainable_params:,} / {total_params:,} ({100 * trainable_params / total_params:.2f}%)")
+    
+    if trainable_params == 0:
+        raise RuntimeError("No trainable parameters found! Check LoRA configuration or model setup.")
+    
     if not torch.cuda.is_available() or device.type == "cpu":
         model = model.to(device)
 

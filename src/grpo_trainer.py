@@ -74,11 +74,16 @@ class GRPOTrainer:
         if seed is not None:
             set_seed(seed)
 
+        # Get trainable parameters (important for LoRA - only train LoRA params)
+        trainable_params = [p for p in model.parameters() if p.requires_grad]
+        if not trainable_params:
+            raise RuntimeError("No trainable parameters found in model! Check if LoRA is properly configured.")
+        
         try:
             import bitsandbytes as bnb
-            self.optimizer = bnb.optim.PagedAdamW8bit(model.parameters(), lr=lr)
+            self.optimizer = bnb.optim.PagedAdamW8bit(trainable_params, lr=lr)
         except ImportError:
-            self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
+            self.optimizer = torch.optim.AdamW(trainable_params, lr=lr)
 
     def _generate_rollouts(self, instances: list[dict], device: torch.device) -> list[list[tuple[str, float, torch.Tensor, torch.Tensor]]]:
         """
@@ -188,6 +193,9 @@ class GRPOTrainer:
                 full_ids = torch.cat([prompt_ids, gen_ids_dev], dim=1)
                 pad_id = self.tokenizer.pad_token_id or self.tokenizer.eos_token_id
                 attn_mask = (full_ids != pad_id).long()
+                
+                # Ensure model is in training mode for gradient computation
+                self.model.train()
                 outputs = self.model(full_ids, attention_mask=attn_mask)
                 gen_len = gen_ids_dev.shape[-1]
                 logits = outputs.logits[:, -gen_len - 1: -1, :]
@@ -212,6 +220,14 @@ class GRPOTrainer:
                 per_token_ratio = torch.exp(log_ratios.clamp(-5, 5))  # (T,)
                 per_token_clipped = torch.clamp(per_token_ratio, 1 - self.clip_epsilon, 1 + self.clip_epsilon)
                 loss_term = -adv * torch.min(per_token_ratio, per_token_clipped).mean()
+
+                # Verify that loss_term requires gradients before backward
+                if not loss_term.requires_grad:
+                    raise RuntimeError(
+                        f"Loss term does not require gradients! "
+                        f"Model in training mode: {self.model.training}, "
+                        f"Trainable params: {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}"
+                    )
 
                 if torch.isfinite(loss_term):
                     loss_term.backward()

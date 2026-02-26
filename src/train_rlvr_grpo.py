@@ -320,8 +320,9 @@ def main() -> None:
     # Note: model is passed to GRPOTrainer, not to GRPOConfig
     training_args = GRPOConfig(
         output_dir=cfg.output_dir,
-        logging_steps=10,
-        log_level="info",
+        logging_steps=10,  # Log every 10 steps
+        logging_first_step=True,  # Log the first step
+        log_level="info",  # Info level logging
         learning_rate=cfg.learning_rate,
         per_device_train_batch_size=per_device_train_batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
@@ -331,8 +332,18 @@ def main() -> None:
         temperature=1.0,
         beta=cfg.beta,  # KL coeff
         model_init_kwargs=model_kwargs,
-        report_to="none",
+        report_to="none",  # No external logging (wandb/tensorboard)
         bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
+        # Evaluation and saving
+        eval_strategy="steps" if eval_dataset else "no",
+        eval_steps=50 if eval_dataset else None,  # Evaluate every 50 steps if eval dataset provided
+        save_strategy="steps",
+        save_steps=100,  # Save checkpoint every 100 steps
+        save_total_limit=3,  # Keep only the last 3 checkpoints
+        load_best_model_at_end=False,  # Don't load best model (we'll handle this manually if needed)
+        # Logging details
+        logging_dir=cfg.output_dir,  # Directory for logs
+        run_name="rlvr_grpo_training",  # Name for this training run
     )
 
     # 5. Initialize GRPOTrainer
@@ -350,8 +361,30 @@ def main() -> None:
         eval_dataset=eval_dataset,
     )
 
-    # 6. Start training
-    trainer.train()
+    # 6. Start training with logging
+    print("\n" + "="*80)
+    print("Starting RLVR GRPO Training")
+    print("="*80)
+    print(f"Training dataset size: {len(train_dataset)}")
+    print(f"Evaluation dataset size: {len(eval_dataset) if eval_dataset else 0}")
+    print(f"Batch size: {cfg.batch_size} (per_device: {per_device_train_batch_size}, grad_accum: {gradient_accumulation_steps})")
+    print(f"Number of generations per prompt: {cfg.num_generations}")
+    print(f"Learning rate: {cfg.learning_rate}")
+    print(f"Number of epochs: {cfg.num_train_epochs}")
+    print(f"Temperature: 1.0")
+    print(f"Beta (KL coeff): {cfg.beta}")
+    print("="*80 + "\n")
+    
+    # Start training - logs will be displayed automatically
+    train_result = trainer.train()
+    
+    print("\n" + "="*80)
+    print("Training Complete!")
+    print("="*80)
+    print(f"Training loss: {train_result.training_loss:.4f}" if hasattr(train_result, 'training_loss') else "")
+    if hasattr(train_result, 'metrics'):
+        print(f"Training metrics: {train_result.metrics}")
+    print("="*80 + "\n")
 
     # 7. Save final model (useful path for evaluation pipeline)
     if not args.no_lora:

@@ -5,7 +5,7 @@ data: data/srl_train.jsonl
 val_data: data/srl_val.jsonl
 output_dir: checkpoints/srl/step_500
 
-num_steps: 30
+num_steps: 100
 batch_size: 1
 group_size: 4
 
@@ -17,6 +17,6 @@ clip_epsilon: 0.2
 eps_std: 0.01
 kl_coef: 0.0
 
-checkpoint_every: 1
+checkpoint_every: 10
 eval_every: 5
 seed: 42
