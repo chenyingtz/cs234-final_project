@@ -87,37 +87,46 @@ def extract_final_answer(text: str) -> str:
     return numbers[-1] if numbers else ""
 
 
-def accuracy_reward_func(samples: list[Dict[str, Any]]) -> list[float]:
+def create_accuracy_reward_func(dataset):
     """
-    Simple RLVR reward: 1.0 if final answer matches ground truth, else 0.0.
-
-    The GRPOTrainer in TRL v0.28.0 will call this with a list of dicts containing:
-      - "prompt": str
-      - "completion": str (model-generated completion)
-      - The dataset's "completion" column contains the ground truth solution
+    Create an accuracy reward function that has access to the dataset for ground truth.
+    
+    The GRPOTrainer in TRL v0.28.0 calls reward functions with:
+      - prompts: list of prompt strings (keyword argument)
+      - completions: list of model-generated completion strings (keyword argument)
+      - Additional kwargs may contain metadata
     """
-    rewards: list[float] = []
-    for s in samples:
-        # Model-generated completion
-        model_completion: str = s.get("completion", "")
+    # Create a mapping from prompt to ground truth completion
+    prompt_to_gt = {}
+    for example in dataset:
+        prompt = build_prompt(example)
+        gt_completion = example.get("solution", "")
+        prompt_to_gt[prompt] = gt_completion
+    
+    def accuracy_reward_func(prompts=None, completions=None, **kwargs):
+        """
+        Simple RLVR reward: 1.0 if final answer matches ground truth, else 0.0.
+        """
+        if prompts is None:
+            prompts = []
+        if completions is None:
+            completions = []
         
-        # Ground truth is stored in the dataset's "completion" column
-        # In TRL v0.28.0, the original dataset row might be in metadata
-        # or we need to compare against the dataset's completion column
-        # For now, we'll extract from the sample's original data
-        # Note: This may need adjustment based on how TRL v0.28.0 passes data
-        ground_truth: str = ""
-        if "metadata" in s and isinstance(s["metadata"], dict):
-            ground_truth = s["metadata"].get("completion", "")
-        elif "original_completion" in s:
-            ground_truth = s["original_completion"]
+        rewards: list[float] = []
         
-        # Extract final answers
-        gt = extract_final_answer(ground_truth)
-        pred = extract_final_answer(model_completion)
-
-        rewards.append(1.0 if gt and pred == gt else 0.0)
-    return rewards
+        for i, (prompt, completion) in enumerate(zip(prompts, completions)):
+            # Get ground truth from the dataset mapping
+            ground_truth = prompt_to_gt.get(prompt, "")
+            
+            # Extract final answers
+            gt = extract_final_answer(ground_truth)
+            pred = extract_final_answer(completion)
+            
+            rewards.append(1.0 if gt and pred == gt else 0.0)
+        
+        return rewards
+    
+    return accuracy_reward_func
 
 
 def main() -> None:
@@ -232,15 +241,30 @@ def main() -> None:
     train_dataset = raw_train.map(map_to_prompts)
     eval_dataset = raw_eval.map(map_to_prompts)
 
+    # Create reward function with access to the dataset for ground truth matching
+    accuracy_reward_func = create_accuracy_reward_func(raw_train)
+
     # 2. Load model and apply LoRA (if enabled)
-    print(f"Loading model: {init_from}")
-    model = AutoModelForCausalLM.from_pretrained(
-        init_from,
-        torch_dtype=torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16,
-        trust_remote_code=True,
-        device_map="auto" if torch.cuda.is_available() else None,
-    )
-    print("model", model)
+    # Try to load from init_from, fallback to base model if it fails
+    print(f"Attempting to load model from: {init_from}")
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            init_from,
+            dtype=torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16,
+            trust_remote_code=True,
+            device_map="auto" if torch.cuda.is_available() else None,
+        )
+        print(f"Successfully loaded model from: {init_from}")
+    except Exception as e:
+        print(f"Failed to load model from '{init_from}': {e}")
+        print(f"Falling back to base model: {base_model}")
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model,
+            dtype=torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16,
+            trust_remote_code=True,
+            device_map="auto" if torch.cuda.is_available() else None,
+        )
+        print(f"Successfully loaded base model: {base_model}")
     
     if not args.no_lora:
         # Configure LoRA for Qwen models
@@ -317,6 +341,7 @@ def main() -> None:
     # - prompt_column and completion_column are not parameters
     # - Dataset should have "prompt" and "completion" columns (standard names)
     # - Pass the model object directly (not model path) when using LoRA
+    # - Reward functions are called with prompts and completions as keyword arguments
     trainer = GRPOTrainer(
         model=model,  # Use the LoRA-enabled model
         reward_funcs=[accuracy_reward_func],
