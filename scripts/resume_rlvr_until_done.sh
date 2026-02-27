@@ -31,7 +31,37 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-PYTHON_BIN="${PYTHON_BIN:-python}"
+# Find Python executable - try python3 first, then python, then check conda
+if command -v python3 &> /dev/null; then
+  PYTHON_BIN="${PYTHON_BIN:-python3}"
+elif command -v python &> /dev/null; then
+  PYTHON_BIN="${PYTHON_BIN:-python}"
+else
+  # Try to activate conda environment if available
+  if [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
+    source "$HOME/miniconda3/etc/profile.d/conda.sh"
+    # Try to activate a common environment name (adjust if needed)
+    if conda env list | grep -q "base"; then
+      ENV_NAME=$(conda env list | grep -E "base" | head -n 1 | awk '{print $1}')
+      conda activate "$ENV_NAME" 2>/dev/null || true
+    fi
+    # Now try to find python
+    if command -v python3 &> /dev/null; then
+      PYTHON_BIN="${PYTHON_BIN:-python3}"
+    elif command -v python &> /dev/null; then
+      PYTHON_BIN="${PYTHON_BIN:-python}"
+    else
+      echo "Error: Could not find python or python3. Please ensure Python is installed and in PATH."
+      exit 1
+    fi
+  else
+    echo "Error: Could not find python or python3. Please ensure Python is installed and in PATH."
+    exit 1
+  fi
+fi
+
+echo "Using Python: $PYTHON_BIN"
+$PYTHON_BIN --version || echo "Warning: Could not get Python version"
 
 # Default output directory (can be overridden by --output-dir in args)
 DEFAULT_OUTPUT_DIR="checkpoints/srl_rlvr"
