@@ -185,6 +185,16 @@ def main() -> None:
         action="store_true",
         help="Disable LoRA and use full fine-tuning",
     )
+    parser.add_argument(
+        "--resume-from-checkpoint",
+        type=str,
+        default=None,
+        help=(
+            "Path to a checkpoint directory to resume RLVR training from "
+            "(e.g. checkpoints/srl_rlvr/checkpoint-50). "
+            "If not set, training starts from scratch in output_dir."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -346,7 +356,7 @@ def main() -> None:
         eval_strategy="steps" if eval_dataset else "no",
         eval_steps=50 if eval_dataset else None,  # Evaluate every 50 steps if eval dataset provided
         save_strategy="steps",
-        save_steps=5,  # Save checkpoint every 5 steps
+        save_steps=1,  # Save checkpoint every 5 steps
         save_total_limit=3,  # Keep only the last 3 checkpoints
         load_best_model_at_end=False,  # Don't load best model (we'll handle this manually if needed)
         # Logging details
@@ -384,7 +394,11 @@ def main() -> None:
     print("="*80 + "\n")
     
     # Start training - logs will be displayed automatically
-    train_result = trainer.train()
+    if args.resume_from_checkpoint:
+        print(f"Resuming training from checkpoint: {args.resume_from_checkpoint}")
+        train_result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+    else:
+        train_result = trainer.train()
     
     print("\n" + "="*80)
     print("Training Complete!")
