@@ -146,12 +146,11 @@ def main():
     if getattr(args, "resume_latest", False):
         latest = find_latest_checkpoint(args.output_dir)
         if latest is None:
-            raise SystemExit(
-                f"--resume-latest: no checkpoint found under output_dir={args.output_dir}. "
-                "Run without --resume-latest first to create checkpoints."
-            )
-        args.resume = str(latest)
-        print(f"Resume from latest checkpoint: {args.resume}")
+            args.resume = None
+            print(f"No checkpoint found under output_dir={args.output_dir}. Running from scratch.")
+        else:
+            args.resume = str(latest)
+            print(f"Resume from latest checkpoint: {args.resume}")
 
     set_seed(args.seed)
     device = get_device()
