@@ -31,6 +31,42 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
+def find_latest_checkpoint(output_dir: str) -> Path | None:
+    """
+    Find the latest checkpoint under output_dir by step number.
+    Looks for subdirs named step_N (and optionally 'best'), reads trainer_step.txt
+    or parses step from dir name, and returns the path with the highest step.
+    Returns None if no valid checkpoint is found.
+    """
+    out = Path(output_dir)
+    if not out.exists() or not out.is_dir():
+        return None
+    best_path: Path | None = None
+    best_step = -1
+    for d in out.iterdir():
+        if not d.is_dir():
+            continue
+        step = -1
+        step_file = d / "trainer_step.txt"
+        if step_file.exists():
+            try:
+                step = int(step_file.read_text().strip())
+            except (ValueError, OSError):
+                pass
+        if step < 0 and d.name.startswith("step_"):
+            try:
+                step = int(d.name.split("_", 1)[1])
+            except ValueError:
+                pass
+        # Must look like a checkpoint: has adapter or config
+        has_adapter = (d / "adapter_config.json").exists() or list(d.glob("adapter_model*.bin")) or list(d.glob("adapter_model*.safetensors"))
+        has_config = (d / "config.json").exists()
+        if step >= 0 and (has_adapter or has_config) and step > best_step:
+            best_step = step
+            best_path = d
+    return best_path
+
+
 def main():
     parser = argparse.ArgumentParser(description="SRL GRPO training")
     parser.add_argument("--config", type=str, default=None, help="YAML config path (overrides other args)")
@@ -58,6 +94,11 @@ def main():
     parser.add_argument("--checkpoint-every", type=int, default=100, help="Save every N steps")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint path")
+    parser.add_argument(
+        "--resume-latest",
+        action="store_true",
+        help="Resume from the latest checkpoint in --output-dir (finds highest step_* or best)",
+    )
     parser.add_argument("--val-data", type=str, default=None, help="Validation JSONL path for best-checkpoint selection")
     parser.add_argument("--eval-every", type=int, default=50, help="Validate every N steps")
     parser.add_argument(
@@ -93,13 +134,24 @@ def main():
             "max_new_tokens": "max_new_tokens", "temperature": "temperature",
             "lr": "lr", "clip_epsilon": "clip_epsilon", "eps_std": "eps_std",
             "kl_coef": "kl_coef", "checkpoint_every": "checkpoint_every", "seed": "seed",
-            "resume": "resume", "val_data": "val_data", "eval_every": "eval_every",
+            "resume": "resume", "resume_latest": "resume_latest", "val_data": "val_data", "eval_every": "eval_every",
             "init_from": "init_from",
         }
         for k, v in cfg.items():
             attr = mapping.get(k, k)
             if hasattr(args, attr):
                 setattr(args, attr, v)
+
+    # If --resume-latest, find latest checkpoint in output_dir and set resume
+    if getattr(args, "resume_latest", False):
+        latest = find_latest_checkpoint(args.output_dir)
+        if latest is None:
+            raise SystemExit(
+                f"--resume-latest: no checkpoint found under output_dir={args.output_dir}. "
+                "Run without --resume-latest first to create checkpoints."
+            )
+        args.resume = str(latest)
+        print(f"Resume from latest checkpoint: {args.resume}")
 
     set_seed(args.seed)
     device = get_device()

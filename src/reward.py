@@ -6,6 +6,7 @@ Stub interfaces for embedding cosine and LLM-as-judge.
 
 from __future__ import annotations
 
+import os
 import re
 from abc import ABC, abstractmethod
 from difflib import SequenceMatcher
@@ -70,6 +71,35 @@ def parse_srl_output(text: str) -> tuple[str, str]:
     return (think_content, action_step)
 
 
+def get_parse_failure_reason(text: str) -> str:
+    """
+    Return a short reason why parse_srl_output would give empty action_step.
+    Use for debugging when reward is -1.
+    """
+    if not text or not isinstance(text, str):
+        return "empty_or_invalid_input"
+    text = text.strip()
+    if not text:
+        return "empty_after_strip"
+    if THINK_OPEN not in text:
+        return "missing_think_open_tag"
+    if THINK_CLOSE not in text:
+        return "missing_think_close_tag"
+    think_start = text.find(THINK_OPEN)
+    think_end = text.find(THINK_CLOSE, think_start)
+    if think_end == -1:
+        return "missing_think_close_tag"
+    after_think = text[think_end + len(THINK_CLOSE) :].strip()
+    if not after_think:
+        return "nothing_after_think_close"
+    lines = [l.strip() for l in after_think.split("\n") if l.strip()]
+    if not lines:
+        return "only_whitespace_after_think_close"
+    if len(lines) > 1 and lines[1] and re.match(r"^\d+\.\s", lines[1]):
+        return "multiple_numbered_steps"
+    return "unknown"
+
+
 def is_valid_srl_output(text: str) -> bool:
     """Check if output has valid format (think + single action step)."""
     think, action = parse_srl_output(text)
@@ -104,6 +134,10 @@ DEFAULT_REWARD_FN = SequenceMatcherReward()
 
 INVALID_REWARD = -1.0
 
+# Debug: log only first N parse failures per process so we see reason + snippet without spam
+_PARSE_FAILURE_LOG_COUNT = 0
+_PARSE_FAILURE_LOG_MAX = 3
+
 
 def compute_srl_reward(
     model_output: str,
@@ -122,6 +156,12 @@ def compute_srl_reward(
 
     think, action_step = parse_srl_output(model_output)
     if not action_step:
+        global _PARSE_FAILURE_LOG_COUNT
+        if _PARSE_FAILURE_LOG_COUNT < _PARSE_FAILURE_LOG_MAX:
+            reason = get_parse_failure_reason(model_output)
+            snippet = (model_output.strip()[:350] + "...") if len(model_output) > 350 else model_output.strip()
+            print(f"[SRL reward] No action step: reason={reason} | snippet={repr(snippet)}")
+            _PARSE_FAILURE_LOG_COUNT += 1
         return INVALID_REWARD
 
     return reward_fn(action_step, expert_step)
