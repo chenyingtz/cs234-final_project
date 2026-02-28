@@ -1,403 +1,474 @@
 """
-SRL training entrypoint with LoRA: load config, prepare model, run GRPO training with resume support.
+SRL (Supervised Reinforcement Learning) training using TRL GRPOTrainer.
 
-Uses LoRA (Low-Rank Adaptation) for parameter-efficient fine-tuning.
+Based on paper 2510.25992: "Supervised Reinforcement Learning: From Expert Trajectories
+to Step-wise Reasoning". Uses step-wise rewards (similarity between model action step
+and expert step) instead of outcome-only rewards.
+
+- Data: SRL instances (problem + previous expert steps -> target next step). Load from
+  data/srl_instances.jsonl (from data_prep) or create from s1K-1.1 on the fly.
+- Reward: Dense step-wise reward via SequenceMatcher between model's extracted action
+  step and expert target step (after parsing <think>...</think> format).
+- Trainer: TRL GRPOTrainer (Group Relative Policy Optimization).
+
+Run:
+  # Prepare data first (optional if JSONL exists):
+  python -m src.data_prep --output data/srl_instances.jsonl
+
+  # Train SRL with LoRA:
+  python -m src.train_srl --output-dir checkpoints/srl
+
+  # From base model with custom data:
+  python -m src.train_srl --output-dir checkpoints/srl \\
+    --data-path data/srl_instances.jsonl --max-train-samples 500
 """
 
+from __future__ import annotations
+
 import argparse
+import json
+import re
 from pathlib import Path
+from typing import Any, Dict, List
 
 import torch
+from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import LoraConfig, get_peft_model, TaskType
+from peft import LoraConfig, get_peft_model, PeftModel, TaskType
+from trl import GRPOTrainer, GRPOConfig
 
-from .grpo_trainer import GRPOTrainer
-from .utils import set_seed
-
-
-def get_device() -> torch.device:
-    """Return best available device: CUDA, MPS, or CPU."""
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
+from .model_config import get_base_model
+from .prompts import get_srl_chat_messages, SRL_SYSTEM_PROMPT
+from .reward import compute_srl_reward, INVALID_REWARD
 
 
-def load_config(path: str) -> dict:
-    """Load YAML config."""
-    import yaml
-    with open(path) as f:
-        return yaml.safe_load(f)
+DEFAULT_DATASET = "simplescaling/s1K-1.1"
 
 
-def find_latest_checkpoint(output_dir: str) -> Path | None:
-    """
-    Find the latest checkpoint under output_dir by step number.
-    Looks for subdirs named step_N (and optionally 'best'), reads trainer_step.txt
-    or parses step from dir name, and returns the path with the highest step.
-    Returns None if no valid checkpoint is found.
-    """
-    out = Path(output_dir)
-    if not out.exists() or not out.is_dir():
+def parse_expert_steps(solution: str) -> List[str] | None:
+    """Parse expert solution into numbered steps. Returns list of step strings or None."""
+    if not solution or not isinstance(solution, str):
         return None
-    best_path: Path | None = None
-    best_step = -1
-    for d in out.iterdir():
-        if not d.is_dir():
+    parts = re.split(r"(?m)^\s*(\d+)\.\s*", solution)
+    if len(parts) < 2:
+        return None
+    steps = []
+    for i in range(1, len(parts), 2):
+        if i + 1 < len(parts):
+            step_text = parts[i + 1].strip()
+            if step_text:
+                steps.append(step_text)
+    return steps if len(steps) >= 2 else None
+
+
+def load_srl_instances_from_jsonl(path: str | Path) -> List[Dict[str, Any]]:
+    """Load SRL instances from JSONL produced by data_prep."""
+    path = Path(path)
+    if not path.exists():
+        return []
+    instances = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            instances.append(json.loads(line))
+    return instances
+
+
+def create_srl_instances_from_s1k(
+    dataset_name: str = DEFAULT_DATASET,
+    split: str = "train",
+    max_examples: int | None = None,
+) -> List[Dict[str, Any]]:
+    """Create SRL instances from s1K-1.1 (same logic as data_prep)."""
+    from .prompts import build_srl_user_prompt
+
+    ds = load_dataset(dataset_name, split=split)
+    instances = []
+    for idx, item in enumerate(ds):
+        if max_examples and len(instances) >= max_examples:
+            break
+        problem = item.get("problem") or item.get("question") or ""
+        solution = item.get("solution") or ""
+        if not problem or not solution:
             continue
-        step = -1
-        step_file = d / "trainer_step.txt"
-        if step_file.exists():
-            try:
-                step = int(step_file.read_text().strip())
-            except (ValueError, OSError):
-                pass
-        if step < 0 and d.name.startswith("step_"):
-            try:
-                step = int(d.name.split("_", 1)[1])
-            except ValueError:
-                pass
-        # Must look like a checkpoint: has adapter or config
-        has_adapter = (d / "adapter_config.json").exists() or list(d.glob("adapter_model*.bin")) or list(d.glob("adapter_model*.safetensors"))
-        has_config = (d / "config.json").exists()
-        if step >= 0 and (has_adapter or has_config) and step > best_step:
-            best_step = step
-            best_path = d
-    return best_path
+        steps = parse_expert_steps(solution)
+        if not steps:
+            continue
+        for k in range(2, len(steps) + 1):
+            previous_steps = steps[: k - 1]
+            target_step = steps[k - 1]
+            prompt_user = build_srl_user_prompt(problem, previous_steps)
+            instances.append({
+                "id": f"s1k_{idx}_k{k}",
+                "problem": problem,
+                "steps": steps,
+                "k": k,
+                "prompt_user": prompt_user,
+                "target_step": target_step,
+            })
+            if max_examples and len(instances) >= max_examples:
+                break
+    return instances
 
 
-def main():
-    parser = argparse.ArgumentParser(description="SRL GRPO training")
-    parser.add_argument("--config", type=str, default=None, help="YAML config path (overrides other args)")
-    parser.add_argument("--model", type=str, default="Qwen/Qwen2.5-7B-Instruct", help="Model name or path")
+def build_srl_dataset(
+    instances: List[Dict[str, Any]],
+    tokenizer: Any,
+) -> tuple[Dataset, Dict[str, str]]:
+    """
+    Build HF Dataset with "prompt" column (chat-formatted, with generation prompt).
+    Also return prompt -> target_step mapping for the reward function.
+    Instances from JSONL have "prompt" (user content) and "target_step"; from s1k have
+    "problem", "steps", "k", "prompt_user", "target_step".
+    """
+    prompts_list: List[str] = []
+    prompt_to_target: Dict[str, str] = {}
+
+    for inst in instances:
+        if "prompt_user" in inst:
+            # From create_srl_instances_from_s1k
+            problem = inst["problem"]
+            previous_steps = inst.get("steps", [])[: inst["k"] - 1]
+            messages = get_srl_chat_messages(problem, previous_steps)
+        else:
+            # From JSONL (data_prep): "prompt" is user content
+            messages = [
+                {"role": "system", "content": SRL_SYSTEM_PROMPT},
+                {"role": "user", "content": inst["prompt"]},
+            ]
+        target_step = inst["target_step"]
+        prompt_text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        prompts_list.append(prompt_text)
+        prompt_to_target[prompt_text] = target_step
+
+    dataset = Dataset.from_dict({"prompt": prompts_list})
+    return dataset, prompt_to_target
+
+
+def create_srl_reward_func(prompt_to_target: Dict[str, str]):
+    """
+    Create reward function for GRPOTrainer: step-wise similarity to expert step.
+    TRL calls with (prompts=..., completions=..., **kwargs). Invalid parses get 0.0
+    so they don't break advantage computation.
+    """
+    def reward_func(prompts=None, completions=None, **kwargs):
+        if prompts is None:
+            prompts = []
+        if completions is None:
+            completions = []
+        rewards = []
+        for prompt, completion in zip(prompts, completions):
+            target_step = prompt_to_target.get(prompt, "")
+            r = compute_srl_reward(completion, target_step)
+            if r == INVALID_REWARD:
+                r = 0.0
+            rewards.append(float(r))
+        return rewards
+    return reward_func
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="SRL training with TRL GRPOTrainer")
     parser.add_argument(
         "--init-from",
         type=str,
-        default="checkpoints/sft",
-        help=(
-            "If this directory exists and --resume is not set, initialize SRL "
-            "from this checkpoint instead of the base model (default: checkpoints/sft). "
-            "Set to empty string ('') to disable and use the base model directly."
-        ),
+        default=None,
+        help="Path to checkpoint to start from (e.g. SFT or base). Default: base model.",
     )
-    parser.add_argument("--data", type=str, default="data/srl_instances.jsonl", help="SRL instances JSONL")
-    parser.add_argument("--output-dir", type=str, default="checkpoints/srl", help="Checkpoint output dir")
-    parser.add_argument("--num-steps", type=int, default=500, help="Training steps")
-    parser.add_argument("--batch-size", type=int, default=4, help="Batch size (prompts)")
-    parser.add_argument("--group-size", type=int, default=4, help="Rollouts per prompt (G)")
-    parser.add_argument("--max-new-tokens", type=int, default=512, help="Max generation tokens")
-    parser.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature")
-    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate")
-    parser.add_argument("--clip-epsilon", type=float, default=0.2, help="GRPO clip epsilon")
-    parser.add_argument("--eps-std", type=float, default=1e-4, help="Min reward std for dynamic filter")
-    parser.add_argument("--checkpoint-every", type=int, default=100, help="Save every N steps")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint path")
     parser.add_argument(
-        "--resume-latest",
-        action="store_true",
-        help="Resume from the latest checkpoint in --output-dir (finds highest step_* or best)",
+        "--output-dir",
+        type=str,
+        default="checkpoints/srl",
+        help="Directory to save SRL checkpoints",
     )
-    parser.add_argument("--val-data", type=str, default=None, help="Validation JSONL path for best-checkpoint selection")
-    parser.add_argument("--eval-every", type=int, default=50, help="Validate every N steps")
+    parser.add_argument(
+        "--data-path",
+        type=str,
+        default=None,
+        help="Path to SRL instances JSONL (from data_prep). If not set, create from --dataset-name.",
+    )
+    parser.add_argument(
+        "--dataset-name",
+        type=str,
+        default=DEFAULT_DATASET,
+        help="HuggingFace dataset for creating SRL instances if --data-path not set",
+    )
+    parser.add_argument(
+        "--max-train-samples",
+        type=int,
+        default=None,
+        help="Max SRL instances for training",
+    )
+    parser.add_argument(
+        "--max-eval-samples",
+        type=int,
+        default=100,
+        help="Max instances for eval (if splitting from train)",
+    )
     parser.add_argument(
         "--lora-r",
         type=int,
         default=16,
-        help="LoRA rank (default: 16)",
+        help="LoRA rank",
     )
     parser.add_argument(
         "--lora-alpha",
         type=int,
         default=32,
-        help="LoRA alpha scaling parameter (default: 32)",
+        help="LoRA alpha",
     )
     parser.add_argument(
         "--lora-dropout",
         type=float,
         default=0.05,
-        help="LoRA dropout rate (default: 0.05)",
+        help="LoRA dropout",
     )
     parser.add_argument(
         "--no-lora",
         action="store_true",
-        help="Disable LoRA and use full fine-tuning",
+        help="Disable LoRA (full fine-tuning)",
+    )
+    parser.add_argument(
+        "--resume-from-checkpoint",
+        type=str,
+        default=None,
+        help="Resume from this checkpoint directory (e.g. checkpoints/srl/checkpoint-50)",
+    )
+    parser.add_argument(
+        "--resume-latest",
+        action="store_true",
+        help="Resume from the latest checkpoint in --output-dir (finds checkpoint-* with largest step)",
     )
     args = parser.parse_args()
 
-    if args.config:
-        cfg = load_config(args.config)
-        mapping = {
-            "model": "model", "data": "data", "output_dir": "output_dir",
-            "num_steps": "num_steps", "batch_size": "batch_size", "group_size": "group_size",
-            "max_new_tokens": "max_new_tokens", "temperature": "temperature",
-            "lr": "lr", "clip_epsilon": "clip_epsilon", "eps_std": "eps_std",
-            "kl_coef": "kl_coef", "checkpoint_every": "checkpoint_every", "seed": "seed",
-            "resume": "resume", "resume_latest": "resume_latest", "val_data": "val_data", "eval_every": "eval_every",
-            "init_from": "init_from",
-        }
-        for k, v in cfg.items():
-            attr = mapping.get(k, k)
-            if hasattr(args, attr):
-                setattr(args, attr, v)
+    base_model = get_base_model()
+    init_from = (args.init_from or "").strip() or base_model
 
-    # If --resume-latest, find latest checkpoint in output_dir and set resume
-    if getattr(args, "resume_latest", False):
-        latest = find_latest_checkpoint(args.output_dir)
-        if latest is None:
-            args.resume = None
-            print(f"No checkpoint found under output_dir={args.output_dir}. Running from scratch.")
+    # Resolve resume: GRPOTrainer.train() has no resume_from_checkpoint, so we resume by loading from checkpoint.
+    resume_path = None
+    if args.resume_from_checkpoint:
+        resume_path = str(Path(args.resume_from_checkpoint).resolve())
+    elif args.resume_latest:
+        output_path = Path(args.output_dir)
+        checkpoints = [p for p in output_path.glob("checkpoint-*") if p.is_dir()]
+        def step_num(p):
+            s = p.name.split("-")[-1]
+            return int(s) if s.isdigit() else -1
+        if checkpoints:
+            resume_path = str(max(checkpoints, key=step_num))
+            print("Resume (latest): %s" % resume_path)
         else:
-            args.resume = str(latest)
-            print(f"Resume from latest checkpoint: {args.resume}")
+            print("--resume-latest set but no checkpoint-* in %s; starting from init_from." % args.output_dir)
+    if resume_path:
+        init_from = resume_path
 
-    set_seed(args.seed)
-    device = get_device()
+    print(f"Base model: {base_model}")
+    print(f"Init from: {init_from}")
 
-    start_step = 0
-    if args.resume:
-        print(f"Resuming from {args.resume}")
-        resume_path = Path(args.resume)
-        
-        # Check if this is a LoRA checkpoint (has adapter_config.json)
-        is_lora_checkpoint = (resume_path / "adapter_config.json").exists()
-        
-        if is_lora_checkpoint and not args.no_lora:
-            # Load base model first, then load LoRA adapter
-            # Try to find base model path or use the model argument
-            print("Detected LoRA checkpoint, loading base model and adapter...")
-            base_model_path = args.model  # Default to base model
-            # Check if there's a merged model or base model reference
-            merged_path = resume_path.parent / "merged"
-            if merged_path.exists():
-                base_model_path = str(merged_path)
-                print(f"Found merged model at {base_model_path}, using as base")
-            
-            model = AutoModelForCausalLM.from_pretrained(
-                base_model_path,
-                dtype=torch.bfloat16,
-                trust_remote_code=True,
-                device_map="auto" if torch.cuda.is_available() else None,
-            )
-            # Load LoRA adapter
-            from peft import PeftModel
-            model = PeftModel.from_pretrained(model, str(resume_path))
-            print("Loaded LoRA adapter from checkpoint")
+    # Load tokenizer from the same source as the model when possible so vocab stays in sync (avoids
+    # model producing token ids not in tokenizer.decoder -> None -> TypeError in decode).
+    init_path = Path(init_from)
+    if not init_path.is_absolute():
+        init_path = Path.cwd() / init_path
+    tokenizer_loaded_from_init = False
+    if init_path.exists():
+        # Prefer any dir that looks like a tokenizer (config, vocab, or tokenizer.json)
+        has_tok = (
+            (init_path / "tokenizer_config.json").exists()
+            or (init_path / "tokenizer.json").exists()
+            or (init_path / "vocab.json").exists()
+        )
+        if has_tok:
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(str(init_path), use_fast=False)
+                tokenizer_loaded_from_init = True
+                print(f"Loaded tokenizer from {init_from} (match model vocab)")
+            except Exception as e:
+                print(f"Could not load tokenizer from {init_from}: {e}; using base model tokenizer.")
+    if not tokenizer_loaded_from_init:
+        tokenizer = AutoTokenizer.from_pretrained(base_model, use_fast=False)
+        if init_path.exists():
+            print("Using tokenizer from base model (no tokenizer files in init_from).")
         else:
-            # Load regular checkpoint
-            model = AutoModelForCausalLM.from_pretrained(
-                args.resume, 
-                dtype=torch.bfloat16, 
-                trust_remote_code=True,
-                device_map="auto" if torch.cuda.is_available() else None,
-            )
-        
-        tokenizer = AutoTokenizer.from_pretrained(args.resume, trust_remote_code=True)
-        step_file = resume_path / "trainer_step.txt"
-        if step_file.exists():
-            start_step = int(step_file.read_text().strip())
-            print(f"Resuming from step {start_step}, {args.num_steps - start_step} steps remaining")
+            print("Using tokenizer from base model (init_from is not a local path).")
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    # Load or create SRL instances
+    if args.data_path and Path(args.data_path).exists():
+        instances = load_srl_instances_from_jsonl(args.data_path)
+        print(f"Loaded {len(instances)} SRL instances from {args.data_path}")
     else:
-        init_from_path = args.init_from.strip() if args.init_from else ""
-        init_path = Path(init_from_path) if init_from_path else None
-        
-        # Check if checkpoint directory exists and has valid files
-        has_valid_checkpoint = False
-        is_lora_checkpoint = False
-        
-        # If --init-from is empty, skip checkpoint loading and use base model
-        if not init_from_path:
-            has_valid_checkpoint = False
-        elif init_path and init_path.exists():
-            # Check if this is a LoRA checkpoint (has adapter_config.json and adapter files)
-            adapter_config = init_path / "adapter_config.json"
-            adapter_model = list(init_path.glob("adapter_model*.bin")) + list(init_path.glob("adapter_model*.safetensors"))
-            is_lora_checkpoint = adapter_config.exists() and len(adapter_model) > 0
-            
-            # Check if this is a regular checkpoint (has config.json)
-            has_config = (init_path / "config.json").exists()
-            
-            # Also check for merged model
-            merged_path = init_path.parent / (init_path.name + "_merged")
-            has_merged_model = merged_path.exists() and (merged_path / "config.json").exists()
-            
-            has_valid_checkpoint = is_lora_checkpoint or has_config or has_merged_model
-        
-        if has_valid_checkpoint:
-            print(f"Initializing SRL from SFT checkpoint: {init_from_path}")
-            
-            if is_lora_checkpoint and not args.no_lora:
-                # Load base model first, then load LoRA adapter
-                print("Detected LoRA checkpoint, loading base model and adapter...")
-                # Try to find merged model first
-                merged_path = init_path.parent / (init_path.name + "_merged")
-                if merged_path.exists() and (merged_path / "config.json").exists():
-                    print(f"Found merged model at {merged_path}, using as base")
-                    model = AutoModelForCausalLM.from_pretrained(
-                        str(merged_path),
-                        dtype=torch.bfloat16,
-                        trust_remote_code=True,
-                        device_map="auto" if torch.cuda.is_available() else None,
-                    )
-                else:
-                    # Load base model and then LoRA adapter
-                    from .model_config import get_base_model
-                    base_model = get_base_model()
-                    model = AutoModelForCausalLM.from_pretrained(
-                        base_model,
-                        dtype=torch.bfloat16,
-                        trust_remote_code=True,
-                        device_map="auto" if torch.cuda.is_available() else None,
-                    )
-                    # Load LoRA adapter
-                    from peft import PeftModel
-                    model = PeftModel.from_pretrained(model, str(init_path))
-                    print("Loaded LoRA adapter from SFT checkpoint")
-                
-                # Try to load tokenizer from checkpoint, fallback to base model if not found
-                try:
-                    tokenizer = AutoTokenizer.from_pretrained(init_from_path, trust_remote_code=True)
-                except:
-                    from .model_config import get_base_model
-                    base_model = get_base_model()
-                    tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
-            else:
-                # Load regular checkpoint
-                model = AutoModelForCausalLM.from_pretrained(
-                    init_from_path,
-                    dtype=torch.bfloat16,
-                    trust_remote_code=True,
-                    device_map="auto" if torch.cuda.is_available() else None,
-                )
-                tokenizer = AutoTokenizer.from_pretrained(init_from_path, trust_remote_code=True)
-        else:
-            # No valid checkpoint found, use base model
-            from .model_config import get_base_model
-            base_model = get_base_model()
-            if not init_from_path:
-                print(f"--init-from is empty; using base model: {base_model}")
-            elif init_path and init_path.exists():
-                print(f"Init-from path '{init_from_path}' exists but contains no valid checkpoint files; falling back to base model: {base_model}")
-            else:
-                print(f"Init-from path '{init_from_path}' not found; falling back to base model: {base_model}")
-            
-            # Load base model (LoRA will be applied later if enabled)
-            print(f"Loading base model: {base_model}")
+        instances = create_srl_instances_from_s1k(
+            dataset_name=args.dataset_name,
+            split="train",
+            max_examples=args.max_train_samples,
+        )
+        print(f"Created {len(instances)} SRL instances from {args.dataset_name}")
+
+    if not instances:
+        raise SystemExit("No SRL instances. Run data_prep or use --dataset-name with step-formatted solutions.")
+
+    if args.max_train_samples is not None:
+        instances = instances[: args.max_train_samples]
+
+    # Train/eval split
+    eval_size = min(args.max_eval_samples or 0, max(0, len(instances) - 10))
+    train_size = len(instances) - eval_size
+    train_instances = instances[:train_size]
+    eval_instances = instances[train_size:] if eval_size > 0 else []
+
+    train_dataset, prompt_to_target = build_srl_dataset(train_instances, tokenizer)
+    if eval_instances:
+        eval_dataset, eval_prompt_to_target = build_srl_dataset(eval_instances, tokenizer)
+        prompt_to_target.update(eval_prompt_to_target)
+    else:
+        eval_dataset = None
+
+    reward_func = create_srl_reward_func(prompt_to_target)
+
+    # Load model (base or full checkpoint; if init_from is PEFT adapter, load base then adapter)
+    load_from_path = init_from
+    is_peft_dir = (Path(load_from_path) / "adapter_config.json").exists() if Path(load_from_path).exists() else False
+
+    if is_peft_dir:
+        print(f"Loading base model from {base_model}, then PEFT adapter from {load_from_path}")
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model,
+            torch_dtype=torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16,
+            trust_remote_code=True,
+            device_map="auto" if torch.cuda.is_available() else None,
+        )
+        model = PeftModel.from_pretrained(model, load_from_path, is_trainable=True)
+    else:
+        try:
+            model = AutoModelForCausalLM.from_pretrained(
+                load_from_path,
+                torch_dtype=torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16,
+                trust_remote_code=True,
+                device_map="auto" if torch.cuda.is_available() else None,
+            )
+            print(f"Loaded model from {load_from_path}")
+        except Exception as e:
+            print(f"Failed to load {load_from_path}: {e}; using base model")
             model = AutoModelForCausalLM.from_pretrained(
                 base_model,
-                dtype=torch.bfloat16,
+                torch_dtype=torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16,
                 trust_remote_code=True,
                 device_map="auto" if torch.cuda.is_available() else None,
             )
-            tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
 
-    if tokenizer.pad_token_id is None:
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-
-    # Check if model already has LoRA applied (from checkpoint)
-    # Check if model is a PEFT model by checking for peft_config attribute
-    from peft import PeftModel
-    model_has_lora = isinstance(model, PeftModel) or hasattr(model, 'peft_config')
-    print("model", model)
-    print("model_has_lora", model_has_lora)
-
-    # Apply LoRA if enabled and model doesn't already have LoRA
-    if not args.no_lora and not model_has_lora:
-        # Configure LoRA for Qwen models
-        # Target attention and MLP layers
-        print("Applying LoRA")
-        target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
-        # For Qwen models, also target MLP layers if they exist
-        try:
-            # Check if model has gate_proj, up_proj, down_proj (typical for Qwen)
-            first_layer = next(iter(model.model.layers)) if hasattr(model, 'model') else None
-            if first_layer and hasattr(first_layer, 'mlp'):
-                if hasattr(first_layer.mlp, 'gate_proj'):
+    if not args.no_lora:
+        # Apply LoRA (skip if already a PEFT model from adapter load)
+        if not is_peft_dir:
+            target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
+            try:
+                first_layer = next(iter(model.model.layers)) if hasattr(model, "model") else None
+                if first_layer and hasattr(first_layer, "mlp") and hasattr(first_layer.mlp, "gate_proj"):
                     target_modules.extend(["gate_proj", "up_proj", "down_proj"])
-        except Exception as e:
-            print(f"Error in target modules: {e}")
-            pass
-        
-        lora_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM,
-            r=args.lora_r,
-            lora_alpha=args.lora_alpha,
-            lora_dropout=args.lora_dropout,
-            target_modules=target_modules,
-            bias="none",
-        )
-        
-        print(f"Applying LoRA with rank={args.lora_r}, alpha={args.lora_alpha}, dropout={args.lora_dropout}")
-        print(f"Target modules: {target_modules}")
-        model = get_peft_model(model, lora_config)
+            except Exception:
+                pass
+            lora_config = LoraConfig(
+                task_type=TaskType.CAUSAL_LM,
+                r=args.lora_r,
+                lora_alpha=args.lora_alpha,
+                lora_dropout=args.lora_dropout,
+                target_modules=target_modules,
+                bias="none",
+            )
+            print(f"Applying LoRA rank={args.lora_r}, alpha={args.lora_alpha}, dropout={args.lora_dropout}")
+            print(f"Target modules: {target_modules}")
+            model = get_peft_model(model, lora_config)
+        else:
+            print("Using existing PEFT adapter (trainable); LoRA args ignored.")
         model.print_trainable_parameters()
-    else:
-        print("Using full fine-tuning (LoRA disabled)")
-        # For full fine-tuning, ensure all parameters require gradients
-        for param in model.parameters():
-            param.requires_grad = True
 
-    # Ensure model is in training mode and parameters require gradients
-    model.train()
+    # Enable gradient checkpointing to reduce memory usage
     print("Disabling use_cache and enabling gradient checkpointing")
     model.use_cache = False
     model.gradient_checkpointing_enable()
-    
-    # Verify that some parameters require gradients
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"Trainable parameters: {trainable_params:,} / {total_params:,} ({100 * trainable_params / total_params:.2f}%)")
-    
-    if trainable_params == 0:
-        raise RuntimeError("No trainable parameters found! Check LoRA configuration or model setup.")
-    
-    if not torch.cuda.is_available() or device.type == "cpu":
-        model = model.to(device)
+
+    # 3. Model loading config for GRPOConfig (if needed)
+    model_kwargs = {
+        "dtype": torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16,
+        "low_cpu_mem_usage": True,
+    }
+
+    per_device_batch = 1
+    gradient_accumulation_steps = max(1, 4 // per_device_batch)
+
+    training_args = GRPOConfig(
+        output_dir=args.output_dir,
+        learning_rate=1e-6,
+        per_device_train_batch_size=per_device_batch,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        num_train_epochs=2,
+        num_generations=4,
+        max_completion_length=512,
+        temperature=1.0,
+        beta=0.0,
+        model_init_kwargs=model_kwargs,
+        logging_steps=10,
+        logging_first_step=True,
+        log_level="info",
+        report_to="none",
+        bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
+        eval_strategy="steps" if eval_dataset else "no",
+        eval_steps=50 if eval_dataset else None,
+        save_strategy="steps",
+        save_steps=5,
+        save_total_limit=3,
+        run_name="srl_grpo",
+    )
 
     trainer = GRPOTrainer(
         model=model,
-        tokenizer=tokenizer,
-        ref_model=None,
-        batch_size=args.batch_size,
-        group_size=args.group_size,
-        max_new_tokens=args.max_new_tokens,
-        temperature=args.temperature,
-        kl_coef=0.0,
-        clip_epsilon=args.clip_epsilon,
-        eps_std=args.eps_std,
-        lr=args.lr,
-        checkpoint_every=args.checkpoint_every,
-        output_dir=args.output_dir,
-        seed=args.seed,
+        reward_funcs=[reward_func],
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        processing_class=tokenizer,
     )
 
-    trainer.train(
-        data_path=args.data,
-        num_steps=args.num_steps,
-        device=device,
-        start_step=start_step,
-        val_data_path=getattr(args, "val_data", None),
-        eval_every=getattr(args, "eval_every", 50),
-    )
-    
-    # Save merged model if LoRA was used (for easier evaluation)
-    if not args.no_lora:
-        print("\nMerging and saving LoRA adapter...")
-        try:
-            # Merge LoRA weights into base model
-            merged_model = model.merge_and_unload()
-            merged_output_dir = Path(args.output_dir) / "merged"
-            merged_output_dir.mkdir(parents=True, exist_ok=True)
-            merged_model.save_pretrained(merged_output_dir)
-            tokenizer.save_pretrained(merged_output_dir)
-            print(f"Saved merged model (for evaluation) to: {merged_output_dir}")
-            print(f"Note: Use '{merged_output_dir}' in models_config.json for evaluation")
-        except Exception as e:
-            print(f"Warning: Could not merge LoRA adapter: {e}")
-            print("LoRA adapter weights are saved in the checkpoint directory")
-    
-    print("Training complete.")
+    print("\n" + "=" * 60)
+    print("SRL GRPO Training (step-wise reward, TRL GRPOTrainer)")
+    print("=" * 60)
+    print(f"Train instances: {len(train_dataset)}")
+    print(f"Eval instances: {len(eval_dataset) if eval_dataset else 0}")
+    print("=" * 60 + "\n")
+
+    if args.resume_from_checkpoint:
+        train_result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+    elif args.resume_latest:
+        output_path = Path(args.output_dir)
+        checkpoints = [p for p in output_path.glob("checkpoint-*") if p.is_dir()]
+        def step_num(p):
+            s = p.name.split("-")[-1]
+            return int(s) if s.isdigit() else -1
+        if not checkpoints:
+            print("--resume-latest set but no checkpoint-* found in %s; starting from scratch." % args.output_dir)
+            train_result = trainer.train()
+        else:
+            latest = max(checkpoints, key=step_num)
+            print("Resuming from latest checkpoint: %s" % latest)
+            train_result = trainer.train(resume_from_checkpoint=str(latest))
+    else:
+        train_result = trainer.train()
+
+    trainer.save_model(args.output_dir)
+    tokenizer.save_pretrained(args.output_dir)
+    if not args.no_lora and hasattr(model, "merge_and_unload"):
+        merged = model.merge_and_unload()
+        merged.save_pretrained(args.output_dir + "_merged")
+        tokenizer.save_pretrained(args.output_dir + "_merged")
+        print(f"Merged model saved to {args.output_dir}_merged")
+    print(f"SRL checkpoint saved to {args.output_dir}")
 
 
 if __name__ == "__main__":

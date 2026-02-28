@@ -160,6 +160,7 @@ class GRPOTrainer:
                     del seq_out, logits_g, lp_g, tlp_g
 
             rollouts = []
+            print(f"question: {inst['problem']}")
             for g in range(self.group_size):
                 gen_ids = gen_ids_batch[g: g + 1]  # (1, gen_len)
                 gen_text = self.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
