@@ -72,6 +72,7 @@ def build_prompt(example: Dict[str, Any]) -> str:
     Instructions stress token efficiency, a single answer, and no repetition or off-topic content.
     """
     problem = example.get("problem") or example.get("question") or ""
+    open_think, close_think = "<think>", "</think>"
     return (
         "You are a helpful math assistant. Solve ONLY the following problem. Be token-efficient: "
         "no repetition, no extra questions, no filler.\n\n"
@@ -134,7 +135,7 @@ def _has_think_format(text: str) -> bool:
     return bool(think_content or after_think)
 
 
-def create_accuracy_reward_func(dataset):
+def create_accuracy_reward_func(dataset, prompt_builder=None):
     """
     Create an accuracy reward function that has access to the dataset for ground truth.
     
@@ -143,11 +144,15 @@ def create_accuracy_reward_func(dataset):
       - completions: list of model-generated completion strings (keyword argument)
       - Additional kwargs may contain metadata
     """
+    # Default prompt builder falls back to build_prompt if none is provided.
+    if prompt_builder is None:
+        prompt_builder = build_prompt
+
     # Create a mapping from prompt to ground truth completion.
     # Use stripped prompt as key so lookup works if the trainer passes slightly different whitespace.
     prompt_to_gt = {}
     for example in dataset:
-        prompt = build_prompt(example)
+        prompt = prompt_builder(example)
         key = prompt.strip() if prompt else ""
         gt_completion = example.get("solution", "")
         prompt_to_gt[key] = gt_completion
@@ -340,19 +345,54 @@ def main() -> None:
     if cfg.max_eval_samples is not None:
         raw_eval = raw_eval.select(range(min(cfg.max_eval_samples, len(raw_eval))))
 
+    # Build prompts using the tokenizer's chat template, with a separate system and user message.
+    def build_chat_prompt(example: Dict[str, Any]) -> str:
+        problem_text = example.get("problem") or example.get("question") or ""
+        open_think, close_think = "<think>", "</think>"
+
+        system_content = (
+            "You are a helpful assistant for solving mathematical problems.\n"
+            "A user will provide a math problem and ask you to solve the task.\n"
+            "You should first draft your thinking process (inner monologue). Then, generate the solution."
+            "Your response format must follow the template below: <think> Your thoughts or/and draft, like working through an exercise on"
+            "scratch paper. Be as casual and as long as you want until you are confident to generate a correct solution. </think>\n"
+            "Provide only the single answer and solve the problem.\n"
+
+            "You are a helpful assistant specialized in solving mathematical problems.\n"
+            "A user will provide a math problem for you to solve.\n"
+            "You must first outline your reasoning process (inner monologue) in detail, then provide the final solution.\n"
+            "Response Format Requirement:\n"
+            "Your response must strictly follow this template:\n"
+            "<think> [Your step-by-step reasoning, calculations, and scratchpad notes. Be as thorough and informal as needed until you are confident in the result.] </think>\n"
+            "After the think block, provide only the final answer without further explanation."
+        )
+        user_content = f"Here is the problem:\n{problem_text}\n\nPlease provide the answer:"
+
+        messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": user_content},
+        ]
+
+        return tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+
     def map_to_prompts(example: Dict[str, Any]) -> Dict[str, Any]:
         # GRPOTrainer expects specific column names in TRL v0.28.0
         # Use standard column names: "prompt" and "completion"
         return {
-            "prompt": build_prompt(example),
+            "prompt": build_chat_prompt(example),
             "completion": example.get("solution", ""),  # Use "completion" instead of "solution"
         }
 
     train_dataset = raw_train.map(map_to_prompts)
     eval_dataset = raw_eval.map(map_to_prompts)
 
-    # Create reward function with access to the dataset for ground truth matching
-    accuracy_reward_func = create_accuracy_reward_func(raw_train)
+    # Create reward function with access to the dataset for ground truth matching.
+    # Use the same chat-formatted prompt builder so lookup keys match GRPOTrainer prompts.
+    accuracy_reward_func = create_accuracy_reward_func(raw_train, prompt_builder=build_chat_prompt)
     format_reward_func = create_format_reward_func()
 
     # 2. Load model and apply LoRA (if enabled)
