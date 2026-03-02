@@ -75,12 +75,8 @@ def build_prompt(example: Dict[str, Any]) -> str:
     return (
         "You are a helpful math assistant. Solve the following problem step by step, "
         "then give the final answer clearly.\n\n"
-        "Your response MUST use this format:\n"
-        "1. Start with <think> and write your reasoning (think step-by-step, like scratch work).\n"
-        "2. End the thinking part with </think>\n"
-        "3. After </think>, provide your step-by-step solution, then state the final answer clearly.\n\n"
+        "Format (use exactly): <think> concise reasoning (key steps only) </think> then brief solution steps, then \"The answer is [number]\". Keep both sections concise.\n\n"
         f"Problem:\n{problem}\n\n"
-        "Remember: Start your response with <think>, then </think>, then your solution and final answer.\n\n"
         "Answer:"
     )
 
