@@ -319,10 +319,11 @@ def main() -> None:
         tokenizer.pad_token = tokenizer.eos_token
 
     # 1. Load dataset
-    # Note: s1K-1.1 only has "train" split, so we split it manually
-    dataset = load_dataset(cfg.dataset_name, split="train")
+    # Note: s1K-1.1 only has "train" split, so we split it manually.
+    # Shuffle the full dataset once so both train and eval are random subsets.
+    dataset = load_dataset(cfg.dataset_name, split="train").shuffle(seed=42)
     
-    # Split train/val from the dataset (same approach as train_sft.py)
+    # Split train/val from the shuffled dataset (same approach as train_sft.py)
     EVAL_SIZE = 60
     TRAIN_SIZE = len(dataset) - EVAL_SIZE
     
