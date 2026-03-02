@@ -116,6 +116,7 @@ echo "---------------------------------------------"
 
 # Build command
 CMD=("$PYTHON_BIN" -m src.train_rlvr_grpo "${ARGS[@]}")
+CMD+=(--max-completion-length 1024)
 if [ -n "$LATEST_CKPT" ] && [ -d "$LATEST_CKPT" ]; then
   CMD+=(--resume-from-checkpoint "$LATEST_CKPT")
 fi
