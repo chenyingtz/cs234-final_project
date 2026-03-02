@@ -30,6 +30,7 @@ so that the existing evaluation pipeline can pick it up.
 from __future__ import annotations
 
 import argparse
+import os
 from dataclasses import dataclass
 from typing import Dict, Any
 
@@ -63,15 +64,23 @@ class RLVRConfig:
 
 def build_prompt(example: Dict[str, Any]) -> str:
     """
-    Build a simple instruction-style prompt from a s1K-style example.
-    Assumes fields: "problem" and "solution" (as in s1K-1.1).
-    RLVR reward will check final answer correctness.
+    Build the RLVR prompt from a s1K-style example (fields: "problem", "solution").
+    Follows the format from paper 2510.25992 (Supervised Reinforcement Learning):
+    the model should first produce an internal reasoning monologue in <think>...</think>,
+    then provide the step-by-step solution and final answer after </think>.
+    This aligns with the think-then-act structure and enables the format reward.
     """
     problem = example.get("problem") or example.get("question") or ""
     return (
         "You are a helpful math assistant. Solve the following problem step by step, "
         "then give the final answer clearly.\n\n"
-        f"Problem:\n{problem}\n\nAnswer:"
+        "Your response MUST use this format:\n"
+        "1. Start with <think> and write your reasoning (think step-by-step, like scratch work).\n"
+        "2. End the thinking part with </think>\n"
+        "3. After </think>, provide your step-by-step solution, then state the final answer clearly.\n\n"
+        f"Problem:\n{problem}\n\n"
+        "Remember: Start your response with <think>, then </think>, then your solution and final answer.\n\n"
+        "Answer:"
     )
 
 
@@ -83,8 +92,44 @@ def extract_final_answer(text: str) -> str:
     # Very simple heuristic: take the last number in the string.
     import re
 
-    numbers = re.findall(r"-?\\d+\\.?\\d*", text)
+    numbers = re.findall(r"-?\d+\.?\d*", text)
     return numbers[-1] if numbers else ""
+
+
+def _answers_match(gt: str, pred: str) -> bool:
+    """Compare extracted answers; treat numeric equality so 5 == 5.0."""
+    if not gt or not pred:
+        return False
+    if gt == pred:
+        return True
+    try:
+        return float(gt) == float(pred)
+    except ValueError:
+        return False
+
+FORMAT_REWARD_VALUE = 0.2
+ACCURACY_REWARD_VALUE = 0.8
+
+
+def _has_think_format(text: str) -> bool:
+    """
+    True if the completion has <think>...</think> format (opening and closing think tags
+    with closing tag after the opening, and some content in or after the block).
+    RLVR-specific check; does not use SRL parsing.
+    """
+    if not text or not isinstance(text, str):
+        return False
+    t = text.strip()
+    open_tag, close_tag = "<think>", "</think>"
+    if open_tag not in t or close_tag not in t:
+        return False
+    start = t.find(open_tag)
+    end = t.find(close_tag, start)
+    if end == -1:
+        return False
+    think_content = t[start + len(open_tag) : end].strip()
+    after_think = t[end + len(close_tag) :].strip()
+    return bool(think_content or after_think)
 
 
 def create_accuracy_reward_func(dataset):
@@ -96,37 +141,78 @@ def create_accuracy_reward_func(dataset):
       - completions: list of model-generated completion strings (keyword argument)
       - Additional kwargs may contain metadata
     """
-    # Create a mapping from prompt to ground truth completion
+    # Create a mapping from prompt to ground truth completion.
+    # Use stripped prompt as key so lookup works if the trainer passes slightly different whitespace.
     prompt_to_gt = {}
     for example in dataset:
         prompt = build_prompt(example)
+        key = prompt.strip() if prompt else ""
         gt_completion = example.get("solution", "")
-        prompt_to_gt[prompt] = gt_completion
+        prompt_to_gt[key] = gt_completion
     
     def accuracy_reward_func(prompts=None, completions=None, **kwargs):
         """
-        Simple RLVR reward: 1.0 if final answer matches ground truth, else 0.0.
+        Simple RLVR reward: 0.8 if final answer matches ground truth, else 0.0.
+        Note: If all rewards are 0, GRPO advantages become 0 (zero reward std per group),
+        so training loss will be 0 and no learning happens. Ensure prompt lookup and
+        answer comparison are correct so some rewards can be non-zero.
         """
         if prompts is None:
             prompts = []
         if completions is None:
             completions = []
-        
+
         rewards: list[float] = []
-        
+
         for i, (prompt, completion) in enumerate(zip(prompts, completions)):
-            # Get ground truth from the dataset mapping
-            ground_truth = prompt_to_gt.get(prompt, "")
-            
-            # Extract final answers
+            # Look up with stripped key to match how we built the map
+            key = (prompt.strip() if prompt else "")
+            ground_truth = prompt_to_gt.get(key, "")
+
             gt = extract_final_answer(ground_truth)
             pred = extract_final_answer(completion)
-            
-            rewards.append(1.0 if gt and pred == gt else 0.0)
-        
+            rewards.append(ACCURACY_REWARD_VALUE if _answers_match(gt, pred) else 0.0)
+
+        # Optional: log first few reward samples to verify lookup and comparison (set RLVR_DEBUG_REWARD=1)
+        if os.environ.get("RLVR_DEBUG_REWARD", "").strip() == "1":
+            for i, (r, p, c) in enumerate(zip(rewards, prompts[:3], completions[:3])):
+                key = (p.strip() if p else "")
+                gt_raw = prompt_to_gt.get(key, "")
+                gt = extract_final_answer(gt_raw)
+                pred = extract_final_answer(c)
+                print(f"[RLVR reward] sample {i}: gt={gt!r} pred={pred!r} reward={r} (key_in_map={key[:50]!r}...)")
+            os.environ["RLVR_DEBUG_REWARD"] = "0"  # log only once
+
         return rewards
     
     return accuracy_reward_func
+
+
+
+
+
+def create_format_reward_func():
+    """
+    Create a format reward function for GRPO.
+    Returns FORMAT_REWARD_VALUE (0.2) per completion that has correct format.
+    Debug: rewards are appended to /tmp/rlvr_format_reward.log.
+    """
+
+    def format_reward_func(prompts=None, completions=None, **kwargs):
+        if completions is None:
+            completions = []
+        rewards: list[float] = []
+        for completion in completions:
+            rewards.append(FORMAT_REWARD_VALUE if _has_think_format(completion) else 0.0)
+            print(f"Reward: {rewards[-1]}")
+            try:
+                with open("/tmp/rlvr_format_reward.log", "a") as f:
+                    f.write(f"Reward: {rewards[-1]}, Completion: {completion}\n\n")
+            except OSError:
+                pass
+        return rewards
+
+    return format_reward_func
 
 
 def main() -> None:
@@ -253,6 +339,7 @@ def main() -> None:
 
     # Create reward function with access to the dataset for ground truth matching
     accuracy_reward_func = create_accuracy_reward_func(raw_train)
+    format_reward_func = create_format_reward_func()
 
     # 2. Load model and apply LoRA (if enabled)
     # Try to load from init_from, fallback to base model if it fails
@@ -373,7 +460,7 @@ def main() -> None:
     # - Reward functions are called with prompts and completions as keyword arguments
     trainer = GRPOTrainer(
         model=model,  # Use the LoRA-enabled model
-        reward_funcs=[accuracy_reward_func],
+        reward_funcs=[accuracy_reward_func, format_reward_func],
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
