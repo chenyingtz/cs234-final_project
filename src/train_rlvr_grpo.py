@@ -180,12 +180,11 @@ def create_accuracy_reward_func(dataset):
                 print(f"[RLVR reward] sample {i}: gt={gt!r} pred={pred!r} reward={r} (key_in_map={key[:50]!r}...)")
             os.environ["RLVR_DEBUG_REWARD"] = "0"  # log only once
 
-            print(f"Reward: {rewards[-1]}")
-            try:
-                with open("/tmp/rlvr_format_reward.log", "a") as f:
-                    f.write(f"Accuracy Reward: {rewards[-1]}\n")
-            except OSError:
-                pass
+        try:
+            with open("/tmp/rlvr_reward.log", "a") as f:
+                f.write(f"Accuracy Reward: {rewards[-1]}\n")
+        except OSError:
+            pass
         return rewards
     
     return accuracy_reward_func
@@ -207,9 +206,8 @@ def create_format_reward_func():
         rewards: list[float] = []
         for completion in completions:
             rewards.append(FORMAT_REWARD_VALUE if _has_think_format(completion) else 0.0)
-            print(f"Reward: {rewards[-1]}")
             try:
-                with open("/tmp/rlvr_format_reward.log", "a") as f:
+                with open("/tmp/rlvr_reward.log", "a") as f:
                     f.write(f"Format Reward: {rewards[-1]}\n Completion: {completion}\n")
             except OSError:
                 pass
