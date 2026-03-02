@@ -58,6 +58,7 @@ class RLVRConfig:
     learning_rate: float = 5e-7
     batch_size: int = 4
     num_generations: int = 4
+    max_completion_length: int = 4096  # max tokens to generate per completion
     num_train_epochs: int = 2  # paper uses steps; epochs is a practical proxy
     beta: float = 0.0  # KL coeff
 
@@ -282,6 +283,12 @@ def main() -> None:
         ),
     )
 
+    parser.add_argument(
+        "--max-completion-length",
+        type=int,
+        default=512,
+        help="Max tokens to generate per completion (default: 512)",
+    )
     args = parser.parse_args()
 
     cfg = RLVRConfig(
@@ -290,6 +297,7 @@ def main() -> None:
         dataset_name=args.dataset_name,
         max_train_samples=args.max_train_samples,
         max_eval_samples=args.max_eval_samples,
+        max_completion_length=args.max_completion_length,
     )
 
     base_model = get_base_model()
@@ -433,7 +441,7 @@ def main() -> None:
         gradient_accumulation_steps=gradient_accumulation_steps,
         num_train_epochs=cfg.num_train_epochs,
         num_generations=cfg.num_generations,
-        max_completion_length=512,
+        max_completion_length=cfg.max_completion_length,
         temperature=1.0,
         beta=cfg.beta,  # KL coeff
         model_init_kwargs=model_kwargs,
@@ -474,6 +482,7 @@ def main() -> None:
     print(f"Evaluation dataset size: {len(eval_dataset) if eval_dataset else 0}")
     print(f"Batch size: {cfg.batch_size} (per_device: {per_device_train_batch_size}, grad_accum: {gradient_accumulation_steps})")
     print(f"Number of generations per prompt: {cfg.num_generations}")
+    print(f"Max completion length (tokens): {cfg.max_completion_length}")
     print(f"Learning rate: {cfg.learning_rate}")
     print(f"Number of epochs: {cfg.num_train_epochs}")
     print(f"Temperature: 1.0")
