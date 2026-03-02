@@ -69,13 +69,18 @@ def build_prompt(example: Dict[str, Any]) -> str:
     Follows the format from paper 2510.25992 (Supervised Reinforcement Learning):
     the model should first produce an internal reasoning monologue in <think>...</think>,
     then provide the step-by-step solution and final answer after </think>.
-    This aligns with the think-then-act structure and enables the format reward.
+    Instructions stress token efficiency, a single answer, and no repetition or off-topic content.
     """
     problem = example.get("problem") or example.get("question") or ""
     return (
-        "You are a helpful math assistant. Solve the following problem step by step, "
-        "then give the final answer clearly.\n\n"
-        "Format (use exactly): <think> concise reasoning (key steps only) </think> then brief solution steps, then \"The answer is [number]\". Keep both sections concise.\n\n"
+        "You are a helpful math assistant. Solve ONLY the following problem. Be token-efficient: "
+        "no repetition, no extra questions, no filler.\n\n"
+        "Rules:\n"
+        "1. Use exactly one <think>...</think> block with concise reasoning, then brief solution steps.\n"
+        "2. End with exactly one line: \"The answer is [number]\" (replace [number] with your final answer).\n"
+        "3. Stop immediately after that line. Do not repeat the answer, do not answer other questions, "
+        "and do not add more text to fill space.\n\n"
+        "Format: <think> key steps only </think> solution steps, then \"The answer is [number]\".\n\n"
         f"Problem:\n{problem}\n\n"
         "Answer:"
     )
