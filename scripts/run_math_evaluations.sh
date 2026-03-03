@@ -24,15 +24,33 @@ echo "Step 1: Running evaluations..."
 #  --config configs/models_config.json
 
 
-python -m src.eval_all_benchmarks \
-  --models base \
-  --benchmarks minerva_math \
-  --modes greedy avg1 \
-  --max-gen-toks 4096 \
-  --results-dir results-0228-0216 \
-  --checkpoint-file results-0228-0216/eval_checkpoint.json \
-  --cache-dir /mnt/persistent/lm_eval_cache \
-  --config configs/models_config.json
+DATE_TAG=${DATE_TAG:-$(date +%m%d)}
+
+# Allow controlling models / benchmarks / modes via environment variables,
+# with sensible defaults if not provided.
+MODELS=${MODELS:-"srl"}
+BENCHMARKS=${BENCHMARKS:-"aime24 aime25"}
+MODES=${MODES:-"greedy avg1"}
+
+for model in $MODELS; do
+  for bench in $BENCHMARKS; do
+    for mode in $MODES; do
+      echo "Start run benchmark with model=${model}, benchmark=${bench}, mode=${mode}"
+      RESULTS_DIR="results-${DATE_TAG}-${model}-${bench}_${mode}"
+      CACHE_DIR="benchmark_cache_dir/persistent/lm_eval_cache_${bench}_${mode}"
+
+      python -m src.eval_all_benchmarks \
+        --models "${model}" \
+        --benchmarks "${bench}" \
+        --modes "${mode}" \
+        --max-gen-toks 4096 \
+        --results-dir "${RESULTS_DIR}" \
+        --checkpoint-file "${RESULTS_DIR}/eval_checkpoint.json" \
+        --cache-dir "${CACHE_DIR}" \
+        --config configs/models_config.json
+    done
+  done
+done
 
 
 # test run

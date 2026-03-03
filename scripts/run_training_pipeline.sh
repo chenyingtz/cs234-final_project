@@ -14,9 +14,9 @@ cd "$(dirname "$0")/.."
 
 SFT_OUTPUT="checkpoints/sft"
 SRL_OUTPUT="checkpoints/srl"
-SRL_INIT_FROM="checkpoints/sft"
+SRL_INIT_FROM="checkpoints/sft_merged"
 RLVR_OUTPUT="checkpoints/srl_rlvr"
-RLVR_INIT_FROM="checkpoints/srl"
+RLVR_INIT_FROM="checkpoints/srl_merged"
 
 DEVICE_ARG=""
 

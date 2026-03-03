@@ -28,10 +28,12 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import random
 from pathlib import Path
 from typing import Any, Dict, List
 
 import torch
+import yaml
 from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import LoraConfig, get_peft_model, PeftModel, TaskType
@@ -202,13 +204,13 @@ def main() -> None:
     parser.add_argument(
         "--max-train-samples",
         type=int,
-        default=None,
+        default=250,
         help="Max SRL instances for training",
     )
     parser.add_argument(
         "--max-eval-samples",
         type=int,
-        default=100,
+        default=60,
         help="Max instances for eval (if splitting from train)",
     )
     parser.add_argument(
@@ -245,9 +247,42 @@ def main() -> None:
         action="store_true",
         help="Resume from the latest checkpoint in --output-dir (finds checkpoint-* with largest step)",
     )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="configs/srl_qwen7b.yaml",
+        help="Path to YAML config (e.g. configs/srl_qwen7b.yaml) to override training hyperparameters and paths.",
+    )
     args = parser.parse_args()
 
-    base_model = get_base_model()
+    # Load YAML configuration (if provided) to override defaults
+    cfg: Dict[str, Any] = {}
+    if args.config:
+        cfg_path = Path(args.config)
+        if cfg_path.is_file():
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                loaded = yaml.safe_load(f)
+            if isinstance(loaded, dict):
+                cfg = loaded
+                print(f"Loaded config from {cfg_path}")
+            else:
+                print(f"Config file {cfg_path} did not contain a dict; ignoring.")
+        else:
+            print(f"Config file {cfg_path} not found; using CLI/default hyperparameters.")
+
+    # Allow config to override model and output/data paths if present
+    base_model = cfg.get("model", get_base_model())
+
+    if "output_dir" in cfg:
+        args.output_dir = cfg["output_dir"]
+
+    if not args.data_path and "data" in cfg:
+        args.data_path = cfg["data"]
+    if not args.max_train_samples and "max_train_samples" in cfg:
+        args.max_train_samples = cfg["max_train_samples"]
+    if not args.max_eval_samples and "max_eval_samples" in cfg:
+        args.max_eval_samples = cfg["max_eval_samples"]
+
     init_from = (args.init_from or "").strip() or base_model
 
     # Resolve resume: GRPOTrainer.train() has no resume_from_checkpoint, so we resume by loading from checkpoint.
@@ -300,6 +335,10 @@ def main() -> None:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # Derive a maximum number of samples to load, guarding against None values.
+    train_limit = args.max_train_samples if args.max_train_samples is not None else 0
+    eval_limit = args.max_eval_samples if args.max_eval_samples is not None else 0
+    max_samples = train_limit + eval_limit if (train_limit or eval_limit) else None
     # Load or create SRL instances
     if args.data_path and Path(args.data_path).exists():
         instances = load_srl_instances_from_jsonl(args.data_path)
@@ -308,15 +347,24 @@ def main() -> None:
         instances = create_srl_instances_from_s1k(
             dataset_name=args.dataset_name,
             split="train",
-            max_examples=args.max_train_samples,
+            max_examples=max_samples,
         )
         print(f"Created {len(instances)} SRL instances from {args.dataset_name}")
 
     if not instances:
         raise SystemExit("No SRL instances. Run data_prep or use --dataset-name with step-formatted solutions.")
 
-    if args.max_train_samples is not None:
-        instances = instances[: args.max_train_samples]
+    if max_samples is not None:
+        instances = instances[: max_samples]
+        print(f"Trimmed instances to {len(instances)}")
+
+    # Shuffle instances deterministically before train/eval split
+    seed_value = getattr(args, "seed", None)
+    if seed_value is not None:
+        rng = random.Random(seed_value)
+        rng.shuffle(instances)
+    else:
+        random.shuffle(instances)
 
     # Train/eval split
     eval_size = min(args.max_eval_samples or 0, max(0, len(instances) - 10))
@@ -400,19 +448,31 @@ def main() -> None:
         "low_cpu_mem_usage": True,
     }
 
+    # Use batch / generation settings from config if available
+    batch_size = int(cfg.get("batch_size", 4))
     per_device_batch = 1
-    gradient_accumulation_steps = max(1, 4 // per_device_batch)
+    gradient_accumulation_steps = max(1, batch_size // per_device_batch)
+
+    learning_rate = float(cfg.get("lr", 1e-6))
+    num_train_epochs = int(cfg.get("num_train_epochs", 2))
+    num_generations = int(cfg.get("num_generations", 4))
+    max_completion_length = int(cfg.get("max_new_tokens", 512))
+    temperature = float(cfg.get("temperature", 1.0))
+    beta = float(cfg.get("kl_coef", 0.0))
+    eval_steps = int(cfg.get("eval_every", 50)) if eval_dataset else None
+    save_steps = int(cfg.get("checkpoint_every", 5))
+    seed = int(cfg.get("seed", 42))
 
     training_args = GRPOConfig(
         output_dir=args.output_dir,
-        learning_rate=1e-6,
+        learning_rate=learning_rate,
         per_device_train_batch_size=per_device_batch,
         gradient_accumulation_steps=gradient_accumulation_steps,
-        num_train_epochs=2,
-        num_generations=4,
-        max_completion_length=512,
-        temperature=1.0,
-        beta=0.0,
+        num_train_epochs=num_train_epochs,
+        num_generations=num_generations,
+        max_completion_length=max_completion_length,
+        temperature=temperature,
+        beta=beta,
         model_init_kwargs=model_kwargs,
         logging_steps=10,
         logging_first_step=True,
@@ -420,9 +480,9 @@ def main() -> None:
         report_to="none",
         bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
         eval_strategy="steps" if eval_dataset else "no",
-        eval_steps=50 if eval_dataset else None,
+        eval_steps=eval_steps,
         save_strategy="steps",
-        save_steps=5,
+        save_steps=save_steps,
         save_total_limit=3,
         run_name="srl_grpo",
     )

@@ -484,6 +484,7 @@ def main() -> None:
         log_level="info",  # Info level logging
         learning_rate=cfg.learning_rate,
         per_device_train_batch_size=per_device_train_batch_size,
+        per_device_eval_batch_size=gradient_accumulation_steps,
         gradient_accumulation_steps=gradient_accumulation_steps,
         num_train_epochs=cfg.num_train_epochs,
         num_generations=cfg.num_generations,
