@@ -467,6 +467,7 @@ def main() -> None:
         output_dir=args.output_dir,
         learning_rate=learning_rate,
         per_device_train_batch_size=per_device_batch,
+        per_device_eval_batch_size=gradient_accumulation_steps,
         gradient_accumulation_steps=gradient_accumulation_steps,
         num_train_epochs=num_train_epochs,
         num_generations=num_generations,
