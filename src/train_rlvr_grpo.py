@@ -58,8 +58,8 @@ class RLVRConfig:
     learning_rate: float = 5e-7
     batch_size: int = 4
     num_generations: int = 4
-    max_completion_length: int = 4096  # max tokens to generate per completion
-    num_train_epochs: int = 2  # paper uses steps; epochs is a practical proxy
+    max_completion_length: int = 8192  # max tokens to generate per completion
+    num_train_epochs: int = 1  # paper uses steps; epochs is a practical proxy
     beta: float = 0.0  # KL coeff
 
 
@@ -256,7 +256,7 @@ def main() -> None:
     parser.add_argument(
         "--max-eval-samples",
         type=int,
-        default=256,
+        default=20,
         help="Optional: limit number of eval samples",
     )
     parser.add_argument(
@@ -296,8 +296,8 @@ def main() -> None:
     parser.add_argument(
         "--max-completion-length",
         type=int,
-        default=4096,
-        help="Max tokens to generate per completion (default: 4096)",
+        default=8192,
+        help="Max tokens to generate per completion (default: 8192)",
     )
     args = parser.parse_args()
 
@@ -534,6 +534,8 @@ def main() -> None:
     print(f"Number of epochs: {cfg.num_train_epochs}")
     print(f"Temperature: 1.0")
     print(f"Beta (KL coeff): {cfg.beta}")
+    print(f"Max train samples: {cfg.max_train_samples}")
+    print(f"Max eval samples: {cfg.max_eval_samples}")
     print("="*80 + "\n")
     
     # Start training - logs will be displayed automatically
