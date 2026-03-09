@@ -204,7 +204,7 @@ def main() -> None:
     parser.add_argument(
         "--max-train-samples",
         type=int,
-        default=250,
+        default=500,
         help="Max SRL instances for training",
     )
     parser.add_argument(
@@ -454,14 +454,29 @@ def main() -> None:
     gradient_accumulation_steps = max(1, batch_size // per_device_batch)
 
     learning_rate = float(cfg.get("lr", 1e-6))
-    num_train_epochs = int(cfg.get("num_train_epochs", 2))
+    num_train_epochs = int(cfg.get("num_train_epochs", 1))
     num_generations = int(cfg.get("num_generations", 4))
-    max_completion_length = int(cfg.get("max_new_tokens", 512))
+    max_completion_length = int(cfg.get("max_new_tokens", 8192))
     temperature = float(cfg.get("temperature", 1.0))
     beta = float(cfg.get("kl_coef", 0.0))
     eval_steps = int(cfg.get("eval_every", 50)) if eval_dataset else None
     save_steps = int(cfg.get("checkpoint_every", 5))
     seed = int(cfg.get("seed", 42))
+
+    print(f"Batch size: {batch_size}")
+    print(f"Per device batch size: {per_device_batch}")
+    print(f"Gradient accumulation steps: {gradient_accumulation_steps}")
+    print(f"Number of train epochs: {num_train_epochs}")
+    print(f"Number of generations: {num_generations}")
+    print(f"Max completion length: {max_completion_length}")
+    print(f"Temperature: {temperature}")
+    print(f"Beta: {beta}")
+    print(f"Eval steps: {eval_steps}")
+    print(f"Save steps: {save_steps}")
+    print(f"Seed: {seed}")
+    print(f"Output directory: {args.output_dir}")
+    print(f"Evaluation steps: {eval_steps}")
+
 
     training_args = GRPOConfig(
         output_dir=args.output_dir,

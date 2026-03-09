@@ -3,16 +3,16 @@
 model: Qwen/Qwen2.5-3B-Instruct
 data: data/srl_train.jsonl
 val_data: data/srl_val.jsonl
-output_dir: checkpoints/srl/step_500
+output_dir: checkpoints/srl_token_8192/
 
-max_train_samples: 250
+max_train_samples: 500
 max_eval_samples: 60
 batch_size: 4
 group_size: 4
-num_train_epochs: 2
+num_train_epochs: 1
 num_generations: 4
 
-max_new_tokens: 4096
+max_new_tokens: 8192
 temperature: 1.0
 
 lr: 1.0e-6

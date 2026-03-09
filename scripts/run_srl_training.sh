@@ -5,7 +5,7 @@
 set -e
 cd "$(dirname "$0")/.."
 
-OUTPUT_DIR="checkpoints/srl"
+OUTPUT_DIR="checkpoints/srl_token_8192/"
 
 echo "SRL training (TRL GRPOTrainer)"
 echo "  output-dir: $OUTPUT_DIR"
