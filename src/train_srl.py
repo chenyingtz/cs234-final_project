@@ -210,7 +210,7 @@ def main() -> None:
     parser.add_argument(
         "--max-eval-samples",
         type=int,
-        default=60,
+        default=20,
         help="Max instances for eval (if splitting from train)",
     )
     parser.add_argument(
