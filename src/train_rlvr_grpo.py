@@ -238,8 +238,8 @@ def main() -> None:
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="checkpoints/srl_rlvr",
-        help="Directory to save RLVR checkpoints (default: checkpoints/srl_rlvr)",
+        default="checkpoints/rlvr_token_8192/",
+        help="Directory to save RLVR checkpoints (default: checkpoints/rlvr_token_8192/)",
     )
     parser.add_argument(
         "--dataset-name",
