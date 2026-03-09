@@ -6,7 +6,7 @@ val_data: data/srl_val.jsonl
 output_dir: checkpoints/srl_token_8192/
 
 max_train_samples: 500
-max_eval_samples: 60
+max_eval_samples: 20
 batch_size: 4
 group_size: 4
 num_train_epochs: 1
