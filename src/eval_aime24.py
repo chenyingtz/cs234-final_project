@@ -22,7 +22,7 @@ def run_lm_eval(
     temperature: float = 1.0,
     do_sample: bool = True,
     num_return_sequences: int = 1,
-    max_gen_toks: int = 4096,
+    max_gen_toks: int = 8192,
     output_path: str | None = None,
     device: str = "cuda",
     limit: int | None = None,

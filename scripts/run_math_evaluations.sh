@@ -43,7 +43,7 @@ for model in $MODELS; do
         --models "${model}" \
         --benchmarks "${bench}" \
         --modes "${mode}" \
-        --max-gen-toks 4096 \
+        --max-gen-toks 8192 \
         --results-dir "${RESULTS_DIR}" \
         --checkpoint-file "${RESULTS_DIR}/eval_checkpoint.json" \
         --cache-dir "${CACHE_DIR}" \
