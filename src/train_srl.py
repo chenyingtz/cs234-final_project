@@ -476,6 +476,10 @@ def main() -> None:
     print(f"Seed: {seed}")
     print(f"Output directory: {args.output_dir}")
     print(f"Evaluation steps: {eval_steps}")
+    print(f"max train samples: {max_samples}")
+    print(f"max eval samples: {max_eval_samples}")
+    print(f"evel_limit: {eval_limit}")
+    print(f"train_limit: {train_limit}")
 
 
     training_args = GRPOConfig(
