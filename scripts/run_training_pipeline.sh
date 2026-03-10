@@ -13,9 +13,9 @@ set -e
 cd "$(dirname "$0")/.."
 
 SFT_OUTPUT="checkpoints/sft"
-SRL_OUTPUT="checkpoints/srl_token_8192/"
+SRL_OUTPUT="checkpoints/srl_l4_token_8192/"
 SRL_INIT_FROM="checkpoints/sft_merged"
-RLVR_OUTPUT="checkpoints/rlvr_token_8192/"
+RLVR_OUTPUT="checkpoints/rlvr_l4_token_8192/"
 RLVR_INIT_FROM="checkpoints/srl_merged"
 
 DEVICE_ARG=""
@@ -71,6 +71,9 @@ if [[ $SKIP_SRL -eq 0 ]]; then
   SRL_ARGS=(
     --init-from "$SRL_INIT_FROM"
     --output-dir "$SRL_OUTPUT"
+    --config configs/srl_l4.yaml
+    --lora-r 32
+    --lora-alpha 64
     --resume-latest
   )
   if [[ -f data/srl_instances.jsonl ]]; then
@@ -99,8 +102,9 @@ if [[ $SKIP_RLVR -eq 0 ]]; then
   fi
 
   RLVR_ARGS=(
-    --max-completion-length 8192
-    --max-train-samples 500
+    --config configs/rlvr_l4.yaml
+    --lora-r 32
+    --lora-alpha 64
     --init-from "$RLVR_INIT_FROM"
     --output-dir "$RLVR_OUTPUT"
   )

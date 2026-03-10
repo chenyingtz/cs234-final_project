@@ -1,0 +1,38 @@
+# RLVR GRPO training config — optimized for NVIDIA L4 24 GB (g2-standard-8)
+# Memory budget: ~18-19 GB peak (longer completions ~840 tok vs SRL ~500 tok)
+#
+# Launch with:
+#   python -m src.train_rlvr_grpo \
+#     --config configs/rlvr_l4.yaml \
+#     --init-from checkpoints/srl_l4_token_8192_merged \
+#     --lora-r 32 \
+#     --lora-alpha 64 \
+#     --output-dir checkpoints/rlvr_l4_token_8192/
+
+output_dir: checkpoints/rlvr_l4_token_8192/
+
+# Use most of s1K-1.1 dataset
+max_train_samples: 900
+max_eval_samples: 20
+
+# L4 24 GB: headroom for 8 rollouts with 3B + ref model at ~840 tok completions
+# gradient_accumulation_steps = batch_size / per_device_batch(=1) = 8
+batch_size: 8
+num_generations: 8      # was 4 — more rollouts reduces frac_reward_zero_std (currently 0.1-0.3)
+
+num_train_epochs: 2     # was 1 — accuracy_reward still rising (0.02 → 0.12); needs more passes
+
+max_new_tokens: 8192    # keep — model self-terminates at ~840 tokens
+temperature: 1.0        # standard GRPO temperature
+
+# Paper value is 5e-7; keep as initial LR (scheduler will decay it)
+lr: 5.0e-7
+
+kl_coef: 0.01           # was 0.0 — light KL anchor; eval_accuracy=0.0 suggests reward hacking risk
+
+# Eval takes 1677s (~28 min); at eval_every=50 that's ~14 hrs of eval per epoch — unsustainable
+checkpoint_every: 10    # was 5
+eval_every: 200         # was 50 — eval is extremely expensive for RLVR
+
+# Use vCPUs for async data prefetch (g2-standard-8 has 8 vCPUs)
+dataloader_num_workers: 4

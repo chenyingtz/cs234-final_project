@@ -504,6 +504,7 @@ def main() -> None:
         save_steps=save_steps,
         save_total_limit=3,
         run_name="srl_grpo",
+        dataloader_num_workers=int(cfg.get("dataloader_num_workers", 0)),
     )
 
     trainer = GRPOTrainer(

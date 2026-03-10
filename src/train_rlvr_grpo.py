@@ -32,8 +32,10 @@ from __future__ import annotations
 import argparse
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Any
 
+import yaml
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import LoraConfig, get_peft_model, TaskType
@@ -299,15 +301,41 @@ def main() -> None:
         default=8192,
         help="Max tokens to generate per completion (default: 8192)",
     )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to YAML config file to override training hyperparameters (e.g. configs/rlvr_l4.yaml).",
+    )
     args = parser.parse_args()
+
+    # Load YAML config (if provided) to override defaults
+    yaml_cfg: Dict[str, Any] = {}
+    if args.config:
+        cfg_path = Path(args.config)
+        if cfg_path.is_file():
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                loaded = yaml.safe_load(f)
+            if isinstance(loaded, dict):
+                yaml_cfg = loaded
+                print(f"Loaded RLVR config from {cfg_path}")
+            else:
+                print(f"Config file {cfg_path} did not contain a dict; ignoring.")
+        else:
+            print(f"Config file {cfg_path} not found; using CLI/default hyperparameters.")
 
     cfg = RLVRConfig(
         init_from=args.init_from,
-        output_dir=args.output_dir,
+        output_dir=yaml_cfg.get("output_dir", args.output_dir),
         dataset_name=args.dataset_name,
-        max_train_samples=args.max_train_samples,
-        max_eval_samples=args.max_eval_samples,
-        max_completion_length=args.max_completion_length,
+        max_train_samples=yaml_cfg.get("max_train_samples", args.max_train_samples),
+        max_eval_samples=yaml_cfg.get("max_eval_samples", args.max_eval_samples),
+        max_completion_length=int(yaml_cfg.get("max_new_tokens", args.max_completion_length)),
+        learning_rate=float(yaml_cfg.get("lr", 5e-7)),
+        batch_size=int(yaml_cfg.get("batch_size", 4)),
+        num_generations=int(yaml_cfg.get("num_generations", 4)),
+        num_train_epochs=int(yaml_cfg.get("num_train_epochs", 1)),
+        beta=float(yaml_cfg.get("kl_coef", 0.0)),
     )
 
     base_model = get_base_model()
@@ -475,6 +503,12 @@ def main() -> None:
     print(f"Batch size: {cfg.batch_size}")
     print(f"Gradient accumulation steps: {gradient_accumulation_steps}")
 
+    # Derive configurable GRPOConfig values from YAML (with safe defaults)
+    temperature_val = float(yaml_cfg.get("temperature", 1.0))
+    eval_steps_val = int(yaml_cfg.get("eval_every", 50)) if eval_dataset else None
+    save_steps_val = int(yaml_cfg.get("checkpoint_every", 5))
+    dataloader_workers = int(yaml_cfg.get("dataloader_num_workers", 0))
+
     # GRPOConfig in TRL v0.28.0 extends TrainingArguments
     # Note: model is passed to GRPOTrainer, not to GRPOConfig
     training_args = GRPOConfig(
@@ -489,21 +523,22 @@ def main() -> None:
         num_train_epochs=cfg.num_train_epochs,
         num_generations=cfg.num_generations,
         max_completion_length=cfg.max_completion_length,
-        temperature=1.0,
+        temperature=temperature_val,
         beta=cfg.beta,  # KL coeff
         model_init_kwargs=model_kwargs,
         report_to="none",  # No external logging (wandb/tensorboard)
         bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
         # Evaluation and saving
         eval_strategy="steps" if eval_dataset else "no",
-        eval_steps=50 if eval_dataset else None,  # Evaluate every 50 steps if eval dataset provided
+        eval_steps=eval_steps_val,
         save_strategy="steps",
-        save_steps=5,  # Save checkpoint every 5 steps
+        save_steps=save_steps_val,
         save_total_limit=3,  # Keep only the last 3 checkpoints
         load_best_model_at_end=False,  # Don't load best model (we'll handle this manually if needed)
         # Logging details
         logging_dir=cfg.output_dir,  # Directory for logs
         run_name="rlvr_grpo_training",  # Name for this training run
+        dataloader_num_workers=dataloader_workers,
     )
 
     # 5. Initialize GRPOTrainer
