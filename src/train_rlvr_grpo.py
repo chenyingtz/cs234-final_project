@@ -63,6 +63,13 @@ class RLVRConfig:
     max_completion_length: int = 8192  # max tokens to generate per completion
     num_train_epochs: int = 1  # paper uses steps; epochs is a practical proxy
     beta: float = 0.0  # KL coeff
+    lora_r: int = 32
+    lora_alpha: int = 64
+    lora_dropout: float = 0.05
+    temperature: float = 1.0
+    eval_every: int = 50
+    checkpoint_every: int = 5
+    dataloader_num_workers: int = 0
 
 
 def build_prompt(example: Dict[str, Any]) -> str:
@@ -184,7 +191,9 @@ def create_accuracy_reward_func(dataset, prompt_builder=None):
 
         # Optional: log first few reward samples to verify lookup and comparison (set RLVR_DEBUG_REWARD=1)
         if os.environ.get("RLVR_DEBUG_REWARD", "").strip() == "1":
-            for i, (r, p, c) in enumerate(zip(rewards, prompts[:3], completions[:3])):
+            for i, (r, p, c) in enumerate(zip(rewards, prompts or [], completions or [])):
+                if i >= 3:
+                    break
                 key = (p.strip() if p else "")
                 gt_raw = prompt_to_gt.get(key, "")
                 gt = extract_final_answer(gt_raw)
@@ -240,8 +249,8 @@ def main() -> None:
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="checkpoints/rlvr_token_8192/",
-        help="Directory to save RLVR checkpoints (default: checkpoints/rlvr_token_8192/)",
+        default=None,
+        help="Directory to save RLVR checkpoints",
     )
     parser.add_argument(
         "--dataset-name",
@@ -258,25 +267,25 @@ def main() -> None:
     parser.add_argument(
         "--max-eval-samples",
         type=int,
-        default=20,
+        default=None,
         help="Optional: limit number of eval samples",
     )
     parser.add_argument(
         "--lora-r",
         type=int,
-        default=16,
+        default=None,
         help="LoRA rank (default: 16)",
     )
     parser.add_argument(
         "--lora-alpha",
         type=int,
-        default=32,
+        default=None,
         help="LoRA alpha scaling parameter (default: 32)",
     )
     parser.add_argument(
         "--lora-dropout",
         type=float,
-        default=0.05,
+        default=None,
         help="LoRA dropout rate (default: 0.05)",
     )
     parser.add_argument(
@@ -294,17 +303,70 @@ def main() -> None:
             "If not set, training starts from scratch in output_dir."
         ),
     )
-
     parser.add_argument(
         "--max-completion-length",
         type=int,
-        default=8192,
+        default=None,
         help="Max tokens to generate per completion (default: 8192)",
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=None,
+        help="Learning rate",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Batch size",
+    )
+    parser.add_argument(
+        "--num-generations",
+        type=int,
+        default=None,
+        help="Number of generations",
+    )
+    parser.add_argument(
+        "--num-train-epochs",
+        type=int,
+        default=None,
+        help="Number of training epochs",
+    )
+    parser.add_argument(
+        "--beta",
+        type=float,
+        default=None,
+        help="KL coefficient",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="Temperature",
+    )
+    parser.add_argument(
+        "--eval-every",
+        type=int,
+        default=None,
+        help="Evaluation interval in steps (optional; can be set via config YAML).",
+    )
+    parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=None,
+        help="Checkpoint save interval in steps (optional; can be set via config YAML).",
+    )
+    parser.add_argument(
+        "--dataloader-num-workers",
+        type=int,
+        default=None,
+        help="Number of dataloader worker processes (optional; can be set via config YAML).",
     )
     parser.add_argument(
         "--config",
         type=str,
-        default=None,
+        default="configs/rlvr_l4.yaml",
         help="Path to YAML config file to override training hyperparameters (e.g. configs/rlvr_l4.yaml).",
     )
     args = parser.parse_args()
@@ -324,21 +386,61 @@ def main() -> None:
         else:
             print(f"Config file {cfg_path} not found; using CLI/default hyperparameters.")
 
+    # Override args from config for any argument not explicitly provided on CLI (i.e., still None).
+    # Config values take precedence; hardcoded fallbacks apply when neither CLI nor config provides a value.
+    # Use setattr/getattr because argparse.Namespace attributes are dynamic and not statically known.
+    if getattr(args, "output_dir", None) is None:
+        setattr(args, "output_dir", str(yaml_cfg.get("output_dir", "checkpoints/rlvr_l4_token_8192/")))
+    if getattr(args, "max_train_samples", None) is None and "max_train_samples" in yaml_cfg:
+        setattr(args, "max_train_samples", yaml_cfg["max_train_samples"])
+    if getattr(args, "max_eval_samples", None) is None and "max_eval_samples" in yaml_cfg:
+        setattr(args, "max_eval_samples", int(yaml_cfg.get("max_eval_samples", 50)))
+    if getattr(args, "max_completion_length", None) is None and "max_new_tokens" in yaml_cfg:
+        setattr(args, "max_completion_length", int(yaml_cfg.get("max_new_tokens", 8192)))
+    if getattr(args, "lora_r", None) is None and "lora_r" in yaml_cfg:
+        setattr(args, "lora_r", int(yaml_cfg.get("lora_r", 32)))
+    if getattr(args, "lora_alpha", None) is None and "lora_alpha" in yaml_cfg:
+        setattr(args, "lora_alpha", int(yaml_cfg.get("lora_alpha", 64)))
+    if getattr(args, "lora_dropout", None) is None and "lora_dropout" in yaml_cfg:
+        setattr(args, "lora_dropout", float(yaml_cfg.get("lora_dropout", 0.05)))
+    if getattr(args, "learning_rate", None) is None and "lr" in yaml_cfg:
+        setattr(args, "learning_rate", float(yaml_cfg.get("lr", 5e-7)))
+    if getattr(args, "batch_size", None) is None and "batch_size" in yaml_cfg:
+        setattr(args, "batch_size", int(yaml_cfg.get("batch_size", 4)))
+    if getattr(args, "num_generations", None) is None and "num_generations" in yaml_cfg:
+        setattr(args, "num_generations", int(yaml_cfg.get("num_generations", 4)))
+    if getattr(args, "num_train_epochs", None) is None and "num_train_epochs" in yaml_cfg:
+        setattr(args, "num_train_epochs", int(yaml_cfg.get("num_train_epochs", 1)))
+    if getattr(args, "beta", None) is None and "kl_coef" in yaml_cfg:
+        setattr(args, "beta", float(yaml_cfg.get("kl_coef", 0.0)))
+    if getattr(args, "temperature", None) is None and "temperature" in yaml_cfg:
+        setattr(args, "temperature", float(yaml_cfg.get("temperature", 1.0)))
+    if getattr(args, "eval_every", None) is None and "eval_every" in yaml_cfg:
+        setattr(args, "eval_every", int(yaml_cfg.get("eval_every", 50)))
+    if getattr(args, "checkpoint_every", None) is None and "checkpoint_every" in yaml_cfg:
+        setattr(args, "checkpoint_every", int(yaml_cfg.get("checkpoint_every", 5)))
+    if getattr(args, "dataloader_num_workers", None) is None and "dataloader_num_workers" in yaml_cfg:
+        setattr(args, "dataloader_num_workers", int(yaml_cfg.get("dataloader_num_workers", 0)))
+
     cfg = RLVRConfig(
         init_from=args.init_from,
-        output_dir=yaml_cfg.get("output_dir", args.output_dir),
+        output_dir=args.output_dir,
         dataset_name=args.dataset_name,
-        max_train_samples=yaml_cfg.get("max_train_samples", args.max_train_samples),
-        max_eval_samples=yaml_cfg.get("max_eval_samples", args.max_eval_samples),
-        max_completion_length=int(yaml_cfg.get("max_new_tokens", args.max_completion_length)),
-        learning_rate=float(yaml_cfg.get("lr", 5e-7)),
-        batch_size=int(yaml_cfg.get("batch_size", 4)),
-        num_generations=int(yaml_cfg.get("num_generations", 4)),
-        num_train_epochs=int(yaml_cfg.get("num_train_epochs", 1)),
-        beta=float(yaml_cfg.get("kl_coef", 0.0)),
+        max_train_samples=args.max_train_samples,
+        max_eval_samples=args.max_eval_samples,
+        max_completion_length=args.max_completion_length,
+        learning_rate=args.learning_rate,
+        batch_size=args.batch_size,
+        num_generations=args.num_generations,
+        num_train_epochs=args.num_train_epochs,
+        beta=args.beta,
+        temperature=args.temperature,
+        eval_every=args.eval_every,
+        checkpoint_every=args.checkpoint_every,
+        dataloader_num_workers=args.dataloader_num_workers,
     )
 
-    base_model = get_base_model()
+    base_model = yaml_cfg.get("model", get_base_model())
     print(f"Base model (for tokenizer): {base_model}")
     
     # Default to base model if --init-from is not provided or is empty
@@ -461,16 +563,19 @@ def main() -> None:
             print(f"Error in target modules: {e}")
             pass
         
+        _lora_r = getattr(args, "lora_r", 16)
+        _lora_alpha = getattr(args, "lora_alpha", 32)
+        _lora_dropout = getattr(args, "lora_dropout", 0.05)
         lora_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
-            r=args.lora_r,
-            lora_alpha=args.lora_alpha,
-            lora_dropout=args.lora_dropout,
+            r=_lora_r,
+            lora_alpha=_lora_alpha,
+            lora_dropout=_lora_dropout,
             target_modules=target_modules,
             bias="none",
         )
-        
-        print(f"Applying LoRA with rank={args.lora_r}, alpha={args.lora_alpha}, dropout={args.lora_dropout}")
+
+        print(f"Applying LoRA with rank={_lora_r}, alpha={_lora_alpha}, dropout={_lora_dropout}")
         print(f"Target modules: {target_modules}")
         model = get_peft_model(model, lora_config)
         model.print_trainable_parameters()
@@ -503,14 +608,7 @@ def main() -> None:
     print(f"Batch size: {cfg.batch_size}")
     print(f"Gradient accumulation steps: {gradient_accumulation_steps}")
 
-    # Derive configurable GRPOConfig values from YAML (with safe defaults)
-    temperature_val = float(yaml_cfg.get("temperature", 1.0))
-    eval_steps_val = int(yaml_cfg.get("eval_every", 50)) if eval_dataset else None
-    save_steps_val = int(yaml_cfg.get("checkpoint_every", 5))
-    dataloader_workers = int(yaml_cfg.get("dataloader_num_workers", 0))
-
     # GRPOConfig in TRL v0.28.0 extends TrainingArguments
-    # Note: model is passed to GRPOTrainer, not to GRPOConfig
     training_args = GRPOConfig(
         output_dir=cfg.output_dir,
         logging_steps=10,  # Log every 10 steps
@@ -523,31 +621,25 @@ def main() -> None:
         num_train_epochs=cfg.num_train_epochs,
         num_generations=cfg.num_generations,
         max_completion_length=cfg.max_completion_length,
-        temperature=temperature_val,
+        temperature=cfg.temperature,
         beta=cfg.beta,  # KL coeff
         model_init_kwargs=model_kwargs,
         report_to="none",  # No external logging (wandb/tensorboard)
         bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
         # Evaluation and saving
         eval_strategy="steps" if eval_dataset else "no",
-        eval_steps=eval_steps_val,
+        eval_steps=cfg.eval_every,
         save_strategy="steps",
-        save_steps=save_steps_val,
+        save_steps=cfg.checkpoint_every,
         save_total_limit=3,  # Keep only the last 3 checkpoints
         load_best_model_at_end=False,  # Don't load best model (we'll handle this manually if needed)
         # Logging details
         logging_dir=cfg.output_dir,  # Directory for logs
         run_name="rlvr_grpo_training",  # Name for this training run
-        dataloader_num_workers=dataloader_workers,
+        dataloader_num_workers=cfg.dataloader_num_workers,
     )
 
     # 5. Initialize GRPOTrainer
-    # Note: In TRL v0.28.0:
-    # - tokenizer is not passed directly (loaded automatically from model)
-    # - prompt_column and completion_column are not parameters
-    # - Dataset should have "prompt" and "completion" columns (standard names)
-    # - Pass the model object directly (not model path) when using LoRA
-    # - Reward functions are called with prompts and completions as keyword arguments
     trainer = GRPOTrainer(
         model=model,  # Use the LoRA-enabled model
         reward_funcs=[accuracy_reward_func, format_reward_func],
@@ -567,10 +659,16 @@ def main() -> None:
     print(f"Max completion length (tokens): {cfg.max_completion_length}")
     print(f"Learning rate: {cfg.learning_rate}")
     print(f"Number of epochs: {cfg.num_train_epochs}")
-    print(f"Temperature: 1.0")
+    print(f"Temperature: {cfg.temperature}")
     print(f"Beta (KL coeff): {cfg.beta}")
     print(f"Max train samples: {cfg.max_train_samples}")
     print(f"Max eval samples: {cfg.max_eval_samples}")
+    print(f"LoRA r: {cfg.lora_r}")
+    print(f"LoRA alpha: {cfg.lora_alpha}")
+    print(f"LoRA dropout: {cfg.lora_dropout}")
+    print(f"Eval every: {cfg.eval_every} steps")
+    print(f"Checkpoint every: {cfg.checkpoint_every} steps")
+    print(f"Dataloader number of workers: {cfg.dataloader_num_workers}")
     print("="*80 + "\n")
     
     # Start training - logs will be displayed automatically

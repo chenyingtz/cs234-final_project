@@ -11,7 +11,7 @@
 model: Qwen/Qwen2.5-3B-Instruct
 data: data/srl_train.jsonl
 val_data: data/srl_val.jsonl
-output_dir: checkpoints/srl_l4_token_8192/
+output_dir: checkpoints/srl_l4_token_8192
 
 # Use more of s1K-1.1 — 900 train + 50 eval
 max_train_samples: 900
@@ -20,15 +20,13 @@ max_eval_samples: 50
 # L4 has headroom for 8 rollouts (vs 4 current)
 # gradient_accumulation_steps = batch_size / per_device_batch(=1) = 8
 batch_size: 8
-group_size: 8
-num_generations: 8
+num_generations: 8 # group_size
 
 num_train_epochs: 2
 
 max_new_tokens: 8192
 temperature: 1.0
 
-# Lower LR: clip_ratio=0 across all steps means policy isn't moving;
 # reducing LR stabilizes updates with the larger effective batch
 lr: 5.0e-7
 

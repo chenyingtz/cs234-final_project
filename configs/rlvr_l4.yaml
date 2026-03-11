@@ -9,30 +9,39 @@
 #     --lora-alpha 64 \
 #     --output-dir checkpoints/rlvr_l4_token_8192/
 
-output_dir: checkpoints/rlvr_l4_token_8192/
+model: Qwen/Qwen2.5-3B-Instruct
+data: data/srl_train.jsonl
+output_dir: checkpoints/rlvr_l4_token_8192
 
 # Use most of s1K-1.1 dataset
 max_train_samples: 900
 max_eval_samples: 20
 
-# L4 24 GB: headroom for 8 rollouts with 3B + ref model at ~840 tok completions
 # gradient_accumulation_steps = batch_size / per_device_batch(=1) = 8
 batch_size: 8
-num_generations: 8      # was 4 — more rollouts reduces frac_reward_zero_std (currently 0.1-0.3)
+num_generations: 8 # group_size
 
-num_train_epochs: 2     # was 1 — accuracy_reward still rising (0.02 → 0.12); needs more passes
+num_train_epochs: 1
 
-max_new_tokens: 8192    # keep — model self-terminates at ~840 tokens
-temperature: 1.0        # standard GRPO temperature
+max_new_tokens: 8192
+temperature: 1.0
 
-# Paper value is 5e-7; keep as initial LR (scheduler will decay it)
+# reducing LR stabilizes updates with the larger effective batch
 lr: 5.0e-7
 
-kl_coef: 0.01           # was 0.0 — light KL anchor; eval_accuracy=0.0 suggests reward hacking risk
+clip_epsilon: 0.2
+eps_std: 0.01
+kl_coef: 0.01
 
-# Eval takes 1677s (~28 min); at eval_every=50 that's ~14 hrs of eval per epoch — unsustainable
-checkpoint_every: 10    # was 5
-eval_every: 200         # was 50 — eval is extremely expensive for RLVR
+# LoRA config — L4 24 GB has headroom for rank 32
+lora_r: 32
+lora_alpha: 64
+lora_dropout: 0.05
+
+# eval/save frequency
+checkpoint_every: 10
+eval_every: 1 # default 100
+seed: 42
 
 # Use vCPUs for async data prefetch (g2-standard-8 has 8 vCPUs)
 dataloader_num_workers: 4
