@@ -44,7 +44,7 @@ lora_dropout: 0.05
 
 # eval/save frequency
 checkpoint_every: 10
-eval_every: 1 # default 100
+eval_every: 300 # default 100
 seed: 42
 
 # Use vCPUs for async data prefetch (g2-standard-8 has 8 vCPUs)
