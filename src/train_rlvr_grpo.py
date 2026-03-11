@@ -584,8 +584,10 @@ def main() -> None:
 
     # Enable gradient checkpointing to reduce memory usage
     print("Disabling use_cache and enabling gradient checkpointing")
-    model.use_cache = False
+    model.config.use_cache = False
     model.gradient_checkpointing_enable()
+    if hasattr(model, "enable_input_require_grads"):
+        model.enable_input_require_grads()
 
     # 3. Model loading config for GRPOConfig (if needed)
     model_kwargs = {
@@ -616,7 +618,7 @@ def main() -> None:
         log_level="info",  # Info level logging
         learning_rate=cfg.learning_rate,
         per_device_train_batch_size=per_device_train_batch_size,
-        per_device_eval_batch_size=gradient_accumulation_steps,
+        per_device_eval_batch_size=1,
         gradient_accumulation_steps=gradient_accumulation_steps,
         num_train_epochs=cfg.num_train_epochs,
         num_generations=cfg.num_generations,

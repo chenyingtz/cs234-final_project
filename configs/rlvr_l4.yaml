@@ -1,8 +1,12 @@
 # RLVR GRPO training config — optimized for NVIDIA L4 24 GB (g2-standard-8)
 # Memory budget: ~18-19 GB peak (longer completions ~840 tok vs SRL ~500 tok)
+# Note: per_device_eval_batch_size is hardcoded to 1 in train_rlvr_grpo.py to
+#       avoid OOM during eval (ref model forward pass over num_generations=8
+#       completions per prompt saturates the 22 GB L4).
+# Recommended: export PYTORCH_ALLOC_CONF=expandable_segments:True before launch.
 #
 # Launch with:
-#   python -m src.train_rlvr_grpo \
+#   PYTORCH_ALLOC_CONF=expandable_segments:True python -m src.train_rlvr_grpo \
 #     --config configs/rlvr_l4.yaml \
 #     --init-from checkpoints/srl_l4_token_8192_merged \
 #     --lora-r 32 \
