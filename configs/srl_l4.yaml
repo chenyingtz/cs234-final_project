@@ -36,9 +36,14 @@ clip_epsilon: 0.2
 eps_std: 0.01
 kl_coef: 0.01
 
+# LoRA config — L4 24 GB has headroom for rank 32
+lora_r: 32
+lora_alpha: 64
+lora_dropout: 0.05
+
 # Less frequent eval/save: eval takes ~1217s; don't bottleneck training
 checkpoint_every: 10
-eval_every: 100
+eval_every: 1 # default 100
 seed: 42
 
 # Use vCPUs for async data prefetch (g2-standard-8 has 8 vCPUs)

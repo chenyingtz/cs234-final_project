@@ -72,8 +72,6 @@ if [[ $SKIP_SRL -eq 0 ]]; then
     --init-from "$SRL_INIT_FROM"
     --output-dir "$SRL_OUTPUT"
     --config configs/srl_l4.yaml
-    --lora-r 32
-    --lora-alpha 64
     --resume-latest
   )
   if [[ -f data/srl_instances.jsonl ]]; then
@@ -103,8 +101,6 @@ if [[ $SKIP_RLVR -eq 0 ]]; then
 
   RLVR_ARGS=(
     --config configs/rlvr_l4.yaml
-    --lora-r 32
-    --lora-alpha 64
     --init-from "$RLVR_INIT_FROM"
     --output-dir "$RLVR_OUTPUT"
   )

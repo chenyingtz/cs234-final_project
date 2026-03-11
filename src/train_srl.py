@@ -88,8 +88,10 @@ def create_srl_instances_from_s1k(
 
     ds = load_dataset(dataset_name, split=split)
     instances = []
+    # Pre-compute a plain int limit (0 = no limit) so comparisons are always int >= int.
+    _limit: int = max_examples if max_examples is not None else 0
     for idx, item in enumerate(ds):
-        if max_examples and len(instances) >= max_examples:
+        if _limit > 0 and len(instances) >= _limit:
             break
         problem = item.get("problem") or item.get("question") or ""
         solution = item.get("solution") or ""
@@ -99,7 +101,7 @@ def create_srl_instances_from_s1k(
         if not steps:
             continue
         for k in range(2, len(steps) + 1):
-            previous_steps = steps[: k - 1]
+            previous_steps = [steps[i] for i in range(k - 1)]
             target_step = steps[k - 1]
             prompt_user = build_srl_user_prompt(problem, previous_steps)
             instances.append({
@@ -110,7 +112,7 @@ def create_srl_instances_from_s1k(
                 "prompt_user": prompt_user,
                 "target_step": target_step,
             })
-            if max_examples and len(instances) >= max_examples:
+            if _limit > 0 and len(instances) >= _limit:
                 break
     return instances
 
@@ -204,31 +206,31 @@ def main() -> None:
     parser.add_argument(
         "--max-train-samples",
         type=int,
-        default=500,
+        default=None,
         help="Max SRL instances for training",
     )
     parser.add_argument(
         "--max-eval-samples",
         type=int,
-        default=20,
+        default=None,
         help="Max instances for eval (if splitting from train)",
     )
     parser.add_argument(
         "--lora-r",
         type=int,
-        default=16,
+        default=None,
         help="LoRA rank",
     )
     parser.add_argument(
         "--lora-alpha",
         type=int,
-        default=32,
+        default=None,
         help="LoRA alpha",
     )
     parser.add_argument(
         "--lora-dropout",
         type=float,
-        default=0.05,
+        default=None,
         help="LoRA dropout",
     )
     parser.add_argument(
@@ -250,7 +252,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=str,
-        default="configs/srl_qwen7b.yaml",
+        default="configs/srl_l4.yaml",
         help="Path to YAML config (e.g. configs/srl_qwen7b.yaml) to override training hyperparameters and paths.",
     )
     args = parser.parse_args()
@@ -270,18 +272,24 @@ def main() -> None:
         else:
             print(f"Config file {cfg_path} not found; using CLI/default hyperparameters.")
 
-    # Allow config to override model and output/data paths if present
+    # Override args from config file for any argument not explicitly provided on CLI (i.e., still None or default).
+    # Config values take precedence over unset args; hardcoded fallbacks apply when neither CLI nor config provides a value.
     base_model = cfg.get("model", get_base_model())
 
-    if "output_dir" in cfg:
+    if args.output_dir is None and "output_dir" in cfg:
         args.output_dir = cfg["output_dir"]
-
-    if not args.data_path and "data" in cfg:
+    if args.data_path is None and "data" in cfg:
         args.data_path = cfg["data"]
-    if not args.max_train_samples and "max_train_samples" in cfg:
+    if args.max_train_samples is None and "max_train_samples" in cfg:
         args.max_train_samples = cfg["max_train_samples"]
-    if not args.max_eval_samples and "max_eval_samples" in cfg:
+    if args.max_eval_samples is None and "max_eval_samples" in cfg:
         args.max_eval_samples = cfg["max_eval_samples"]
+    if args.lora_r is None and "lora_r" in cfg:
+        args.lora_r = int(cfg.get("lora_r", 16))
+    if args.lora_alpha is None and "lora_alpha" in cfg:
+        args.lora_alpha = int(cfg.get("lora_alpha", 32))
+    if args.lora_dropout is None and "lora_dropout" in cfg:
+        args.lora_dropout = float(cfg.get("lora_dropout", 0.05))
 
     init_from = (args.init_from or "").strip() or base_model
 
@@ -437,10 +445,18 @@ def main() -> None:
             print("Using existing PEFT adapter (trainable); LoRA args ignored.")
         model.print_trainable_parameters()
 
-    # Enable gradient checkpointing to reduce memory usage
+    # Enable gradient checkpointing to reduce memory usage.
+    # - Set use_cache=False on model.config (not the model object) so TRL's generate() can
+    #   still temporarily re-enable it internally without conflict.
+    # - enable_input_require_grads() is required for PEFT + gradient checkpointing: without it,
+    #   gradients don't flow through the first frozen embedding layer, causing NaN weight updates.
+    # - use_reentrant=False avoids the reentrant autograd path that can produce NaN with PEFT.
     print("Disabling use_cache and enabling gradient checkpointing")
-    model.use_cache = False
-    model.gradient_checkpointing_enable()
+    if hasattr(model, "config"):
+        model.config.use_cache = False
+    if hasattr(model, "enable_input_require_grads"):
+        model.enable_input_require_grads()
+    model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
 
     # 3. Model loading config for GRPOConfig (if needed)
     model_kwargs = {
@@ -462,6 +478,8 @@ def main() -> None:
     eval_steps = int(cfg.get("eval_every", 50)) if eval_dataset else None
     save_steps = int(cfg.get("checkpoint_every", 5))
     seed = int(cfg.get("seed", 42))
+    dataloader_num_workers = int(cfg.get("dataloader_num_workers", 0))
+
 
     print(f"Batch size: {batch_size}")
     print(f"Per device batch size: {per_device_batch}")
@@ -479,6 +497,10 @@ def main() -> None:
     print(f"max train + eval samples: {max_samples}")
     print(f"evel_limit: {eval_limit}")
     print(f"train_limit: {train_limit}")
+    print(f"dataloader_num_workers: {dataloader_num_workers}")
+    print(f"lora_r: {args.lora_r}")
+    print(f"lora_alpha: {args.lora_alpha}")
+    print(f"lora_dropout: {args.lora_dropout}")
 
 
     training_args = GRPOConfig(
@@ -504,7 +526,7 @@ def main() -> None:
         save_steps=save_steps,
         save_total_limit=3,
         run_name="srl_grpo",
-        dataloader_num_workers=int(cfg.get("dataloader_num_workers", 0)),
+        dataloader_num_workers=dataloader_num_workers,
     )
 
     trainer = GRPOTrainer(
