@@ -18,7 +18,7 @@ data: data/srl_train.jsonl
 output_dir: checkpoints/rlvr_l4_token_8192
 
 # Use most of s1K-1.1 dataset
-max_train_samples: 900
+max_train_samples: 500
 max_eval_samples: 20
 
 # gradient_accumulation_steps = batch_size / per_device_batch(=1) = 8
