@@ -14,7 +14,7 @@ val_data: data/srl_val.jsonl
 output_dir: checkpoints/srl_l4_token_8192
 
 # Use more of s1K-1.1 — 900 train + 50 eval
-max_train_samples: 900
+max_train_samples: 500
 max_eval_samples: 50
 
 # L4 has headroom for 8 rollouts (vs 4 current)
@@ -22,7 +22,7 @@ max_eval_samples: 50
 batch_size: 8
 num_generations: 8 # group_size
 
-num_train_epochs: 2
+num_train_epochs: 1
 
 max_new_tokens: 8192
 temperature: 1.0
@@ -41,7 +41,7 @@ lora_dropout: 0.05
 
 # Less frequent eval/save: eval takes ~1217s; don't bottleneck training
 checkpoint_every: 10
-eval_every: 1 # default 100
+eval_every: 300 # default 100
 seed: 42
 
 # Use vCPUs for async data prefetch (g2-standard-8 has 8 vCPUs)
