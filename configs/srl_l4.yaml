@@ -15,7 +15,7 @@ output_dir: checkpoints/srl_l4_token_8192
 
 # Use more of s1K-1.1 — 900 train + 50 eval
 max_train_samples: 500
-max_eval_samples: 50
+max_eval_samples: 20
 
 # L4 has headroom for 8 rollouts (vs 4 current)
 # gradient_accumulation_steps = batch_size / per_device_batch(=1) = 8
