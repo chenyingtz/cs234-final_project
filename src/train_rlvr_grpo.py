@@ -29,8 +29,12 @@ so that the existing evaluation pipeline can pick it up.
 
 from __future__ import annotations
 
-import argparse
 import os
+
+# Reduce CUDA memory fragmentation (set before importing torch)
+os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+
+import argparse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Any
