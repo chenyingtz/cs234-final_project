@@ -32,7 +32,7 @@ lr: 5.0e-7
 
 clip_epsilon: 0.2
 eps_std: 0.01
-kl_coef: 0.01
+kl_coef: 0.0 # Force KL divergence off
 
 # LoRA config — L4 24 GB has headroom for rank 32
 lora_r: 32
