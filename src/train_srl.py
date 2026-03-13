@@ -488,7 +488,7 @@ def main() -> None:
     print(f"Number of generations: {num_generations}")
     print(f"Max completion length: {max_completion_length}")
     print(f"Temperature: {temperature}")
-    print(f"Beta: {beta}")
+    print(f"Beta (KL coeff): {beta}")
     print(f"Eval steps: {eval_steps}")
     print(f"Save steps: {save_steps}")
     print(f"Seed: {seed}")
