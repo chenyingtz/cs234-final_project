@@ -16,7 +16,7 @@ data: data/srl_train.jsonl
 output_dir: checkpoints/rlvr_l4_conservative
 
 max_train_samples: 300
-max_eval_samples: 20
+max_eval_samples: 10
 
 batch_size: 8
 num_generations: 8
