@@ -444,6 +444,9 @@ def main() -> None:
         eval_every=args.eval_every,
         checkpoint_every=args.checkpoint_every,
         dataloader_num_workers=args.dataloader_num_workers,
+        lora_r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
     )
 
     base_model = yaml_cfg.get("model", get_base_model())
