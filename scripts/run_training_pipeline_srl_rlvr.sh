@@ -15,7 +15,7 @@ cd "$(dirname "$0")/.."
 SFT_OUTPUT="checkpoints/sft"
 SRL_OUTPUT="checkpoints/srl_l4_token_8192"
 SRL_INIT_FROM="checkpoints/sft_merged"
-RLVR_OUTPUT="checkpoints/rlvr_l4_token_8192_srl_rlvr"
+RLVR_OUTPUT="checkpoints/rlvr_l4_conservative"
 RLVR_INIT_FROM="checkpoints/srl_l4_token_8192_merged"
 
 DEVICE_ARG=""
@@ -100,7 +100,7 @@ if [[ $SKIP_RLVR -eq 0 ]]; then
   fi
 
   RLVR_ARGS=(
-    --config configs/rlvr_l4.yaml
+    --config configs/rlvr_l4_conservative.yaml
     --init-from "$RLVR_INIT_FROM"
     --output-dir "$RLVR_OUTPUT"
   )

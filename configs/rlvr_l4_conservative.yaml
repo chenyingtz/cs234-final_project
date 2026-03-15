@@ -1,0 +1,47 @@
+# RLVR "conservative" config — reduces drift from SRL to avoid benchmark degradation
+#
+# Use when SRL->RLVR pipeline degrades AIME (e.g. avg1 drops). Key changes vs rlvr_l4.yaml:
+#   - Lower LR to stay closer to SRL
+#   - Small KL penalty (kl_coef) to anchor policy to SRL
+#   - Fewer train samples and fewer epochs to reduce overfitting to s1K
+#   - Save checkpoints more often so you can pick the best by eval
+#
+# Launch:
+#   python -m src.train_rlvr_grpo --config configs/rlvr_l4_conservative.yaml \
+#     --init-from checkpoints/srl_l4_token_8192_merged \
+#     --output-dir checkpoints/rlvr_l4_conservative
+
+model: Qwen/Qwen2.5-3B-Instruct
+data: data/srl_train.jsonl
+output_dir: checkpoints/rlvr_l4_conservative
+
+max_train_samples: 300
+max_eval_samples: 20
+
+batch_size: 8
+num_generations: 8
+
+num_train_epochs: 1
+
+max_new_tokens: 8192
+temperature: 0.9
+
+# Conservative: lower LR to avoid drifting away from SRL
+lr: 2.0e-7
+
+clip_epsilon: 0.2
+eps_std: 0.01
+# Small KL penalty keeps policy close to SRL (reference); tune in [0.01, 0.05]
+kl_coef: 0.01
+
+# Slightly smaller LoRA to reduce overfitting
+lora_r: 24
+lora_alpha: 48
+lora_dropout: 0.08
+
+# Save often and keep more checkpoints for best-model selection
+checkpoint_every: 5
+eval_every: 100
+seed: 42
+
+dataloader_num_workers: 4

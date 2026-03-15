@@ -25,6 +25,9 @@ This script can be run:
 After training, point `configs/models_config.json["models"]["srl_rlvr"]["model_path"]`
 to the RLVR checkpoint directory (e.g. `checkpoints/srl_rlvr` or `checkpoints/srl_rlvr_merged`) 
 so that the existing evaluation pipeline can pick it up.
+
+If SRL->RLVR degrades benchmarks (e.g. AIME avg1 drops), use a conservative config and/or
+tune lr, kl_coef (beta), max_train_samples, temperature, and LoRA. See RLVR_TUNING.md.
 """
 
 from __future__ import annotations
@@ -33,6 +36,7 @@ import os
 
 # Reduce CUDA memory fragmentation (set before importing torch)
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+os.environ.setdefault("RLVR_DEBUG_REWARD", "1")
 
 import argparse
 from dataclasses import dataclass
@@ -47,6 +51,7 @@ from trl import GRPOTrainer, GRPOConfig
 import torch
 
 from .model_config import get_base_model
+from .utils import extract_aime_answer
 
 
 DEFAULT_DATASET = "simplescaling/s1K-1.1"
@@ -102,14 +107,11 @@ def build_prompt(example: Dict[str, Any]) -> str:
 
 def extract_final_answer(text: str) -> str:
     """
-    Heuristic extractor for final scalar answer from model output.
-    For a real project, you may want to reuse the AIME-style extractor in utils.py.
+    Extract the final answer from model output using the AIME-aware extractor.
+    Handles \\boxed{N}, 'answer is N', 'answer: N', and last 1-3 digit integer (0-999).
     """
-    # Very simple heuristic: take the last number in the string.
-    import re
-
-    numbers = re.findall(r"-?\d+\.?\d*", text)
-    return numbers[-1] if numbers else ""
+    v = extract_aime_answer(text)
+    return str(v) if v is not None else ""
 
 
 def _answers_match(gt: str, pred: str) -> bool:
@@ -167,7 +169,7 @@ def create_accuracy_reward_func(dataset, prompt_builder=None):
     for example in dataset:
         prompt = prompt_builder(example)
         key = prompt.strip() if prompt else ""
-        gt_completion = example.get("solution", "")
+        gt_completion = str(example.get("answer", "") or example.get("solution", ""))
         prompt_to_gt[key] = gt_completion
     
     def accuracy_reward_func(prompts=None, completions=None, **kwargs):
