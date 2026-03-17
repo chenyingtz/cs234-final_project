@@ -498,6 +498,7 @@ def main() -> None:
     print(f"Number of train epochs: {num_train_epochs}")
     print(f"Number of generations: {num_generations}")
     print(f"Max completion length: {max_completion_length}")
+    print(f"Learning rate: {learning_rate}")
     print(f"Temperature: {temperature}")
     print(f"Beta (KL coeff): {beta}")
     print(f"Eval steps: {eval_steps}")
