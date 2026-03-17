@@ -28,7 +28,8 @@ max_new_tokens: 8192
 temperature: 1.0
 
 # reducing LR stabilizes updates with the larger effective batch
-lr: 5.0e-7
+#lr: 5.0e-7
+lr: 2.0e-7
 
 clip_epsilon: 0.2
 eps_std: 0.01
@@ -41,7 +42,7 @@ lora_dropout: 0.05
 
 # Less frequent eval/save: eval takes ~1217s; don't bottleneck training
 checkpoint_every: 5
-eval_every: 250 # default 100
+eval_every: 100 # default 100
 seed: 42
 
 # Use vCPUs for async data prefetch (g2-standard-8 has 8 vCPUs)

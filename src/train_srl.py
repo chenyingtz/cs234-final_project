@@ -41,7 +41,7 @@ from trl import GRPOTrainer, GRPOConfig
 
 from .model_config import get_base_model
 from .prompts import get_srl_chat_messages, SRL_SYSTEM_PROMPT
-from .reward import compute_srl_reward, INVALID_REWARD
+from .reward import compute_srl_reward, INVALID_REWARD, parse_srl_output
 
 
 DEFAULT_DATASET = "simplescaling/s1K-1.1"
@@ -167,11 +167,22 @@ def create_srl_reward_func(prompt_to_target: Dict[str, str]):
         if completions is None:
             completions = []
         rewards = []
-        for prompt, completion in zip(prompts, completions):
+        for idx, (prompt, completion) in enumerate(zip(prompts, completions)):
             target_step = prompt_to_target.get(prompt, "")
             r = compute_srl_reward(completion, target_step)
             if r == INVALID_REWARD:
                 r = 0.0
+            # Debug: only print the first 3 samples for ground truth vs predicted action step and reward
+            if idx < 3:
+                _, predicted_step = parse_srl_output(completion)
+                try:
+                    print(
+                        f"[SRL reward] sample={idx} gt_step={target_step!r} "
+                        f"pred_step={predicted_step!r} reward={r}"
+                    )
+                except Exception:
+                    # Avoid breaking training if printing fails for any reason
+                    pass
             rewards.append(float(r))
         return rewards
     return reward_func
