@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import random
 from pathlib import Path
@@ -166,6 +167,7 @@ def create_srl_reward_func(prompt_to_target: Dict[str, str]):
             prompts = []
         if completions is None:
             completions = []
+        debug = os.environ.get("SRL_DEBUG_REWARD", "").strip() == "1"
         rewards = []
         for idx, (prompt, completion) in enumerate(zip(prompts, completions)):
             target_step = prompt_to_target.get(prompt, "")
@@ -173,7 +175,7 @@ def create_srl_reward_func(prompt_to_target: Dict[str, str]):
             if r == INVALID_REWARD:
                 r = 0.0
             # Debug: only print the first 3 samples for ground truth vs predicted action step and reward
-            if idx < 3:
+            if debug and idx < 3:
                 _, predicted_step = parse_srl_output(completion)
                 try:
                     print(
