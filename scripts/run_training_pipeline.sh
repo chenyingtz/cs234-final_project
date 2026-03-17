@@ -13,7 +13,7 @@ set -e
 cd "$(dirname "$0")/.."
 
 SFT_OUTPUT="checkpoints/sft"
-SRL_OUTPUT="checkpoints/srl_l4_token_8192"
+SRL_OUTPUT="checkpoints/srl_l4_small_lr"
 SRL_INIT_FROM="checkpoints/sft_merged"
 RLVR_OUTPUT="checkpoints/rlvr_l4_token_8192"
 RLVR_INIT_FROM="checkpoints/srl_merged"
