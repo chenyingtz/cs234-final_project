@@ -43,7 +43,8 @@ def get_model_display_name(model_key: str) -> str:
         "srl": "SRL",
         "srl_rlvr": "SRL->RLVR",
         "srl-l4-token-8192-0313v2": "SRL Fine-tuned",
-        "rlvr-l4-token-8192-0314": "RLVR Fine-tuned"
+        "rlvr-l4-token-8192-0314": "RLVR Fine-tuned",
+        "srl->rlvr_finetuned": "SRL(Fine-tuned)->RLVR(Fine-tuned)"
     }
     return model_labels.get(model_key, model_key.upper())
 
@@ -170,7 +171,7 @@ def create_bar_chart(df: pd.DataFrame, output_path: Path, mode: str = "greedy"):
     )
     
     # Sort models in a logical order
-    model_order = ["base", "sft", "rlvr", "srl", "srl_rlvr", "srl-l4-token-8192-0313v2", "rlvr-l4-token-8192-0314"]
+    model_order = ["base", "sft", "rlvr", "srl", "srl_rlvr", "srl-l4-token-8192-0313v2", "rlvr-l4-token-8192-0314", "srl->rlvr_finetuned"]
     pivot = pivot.reindex([m for m in model_order if m in pivot.index])
     
     # Create figure
@@ -227,7 +228,7 @@ def create_line_plot(df: pd.DataFrame, output_path: Path, mode: str = "greedy"):
     )
     
     # Sort models
-    model_order = ["base", "sft", "rlvr", "srl", "srl_rlvr", "srl-l4-token-8192-0313v2", "rlvr-l4-token-8192-0314"]
+    model_order = ["base", "sft", "rlvr", "srl", "srl_rlvr", "srl-l4-token-8192-0313v2", "rlvr-l4-token-8192-0314", "srl->rlvr_finetuned"]
     available_models = [m for m in model_order if m in pivot.columns]
     pivot = pivot[available_models]
     
@@ -319,7 +320,7 @@ def create_comprehensive_bar_chart(df: pd.DataFrame, output_path: Path):
     )
     
     # Sort models
-    model_order = ["base", "sft", "rlvr", "srl", "srl_rlvr", "srl-l4-token-8192-0313v2", "rlvr-l4-token-8192-0314"]
+    model_order = ["base", "sft", "rlvr", "srl", "srl_rlvr", "srl-l4-token-8192-0313v2", "rlvr-l4-token-8192-0314", "srl->rlvr_finetuned"]
     pivot = pivot.reindex([m for m in model_order if m in pivot.index])
     
     # Sort columns by benchmark then mode
@@ -461,7 +462,7 @@ def create_benchmark_mode_plot(df: pd.DataFrame, output_path: Path):
     pivot = pivot.reindex(sorted_index)
     
     # Sort models
-    model_order = ["base", "sft", "rlvr", "srl", "srl_rlvr", "srl-l4-token-8192-0313v2", "rlvr-l4-token-8192-0314"]
+    model_order = ["base", "sft", "rlvr", "srl", "srl_rlvr", "srl-l4-token-8192-0313v2", "rlvr-l4-token-8192-0314", "srl->rlvr_finetuned"]
     available_models = [m for m in model_order if m in pivot.columns]
     pivot = pivot[available_models]
     
@@ -609,7 +610,7 @@ def create_multi_mode_comparison(df: pd.DataFrame, output_path: Path):
             aggfunc="first"
         )
         
-        model_order = ["base", "sft", "rlvr", "srl", "srl_rlvr"]
+        model_order = ["base", "sft", "rlvr", "srl", "srl_rlvr", "srl->rlvr_finetuned"]
         mode_order = ["greedy", "avg1", "avg32"]
         
         pivot = pivot.reindex([m for m in model_order if m in pivot.index])
