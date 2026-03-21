@@ -19,7 +19,7 @@
     },
     "srl_rlvr": {
       "model_name": null,
-      "model_path": "checkpoints/rlvr_l4_conservative_merged",
+      "model_path": "checkpoints/rlvr_l4_conservative_step500_merged",
       "description": "SRL→RLVR pipeline model (SRL then RLVR). Uses base_model from config. Update path to your SRL→RLVR checkpoint."
     }
   },
